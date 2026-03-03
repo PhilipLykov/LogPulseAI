@@ -36,6 +36,8 @@ export interface NormalizedEvent {
   raw?: Record<string, unknown>;
   external_id?: string;
   connector_id?: string;
+  /** Internal flag: true when the raw timestamp already included TZ info (epoch, Z, +HH:MM). */
+  _timestampHadTzInfo?: boolean;
 }
 
 // ── Stored event (after source matching and persistence) ─────
@@ -131,6 +133,7 @@ export interface LogSource {
   label: string;
   selector: LogSourceSelector | LogSourceSelector[];
   priority: number;
+  parse_profile?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -140,12 +143,14 @@ export interface CreateLogSourceBody {
   label: string;
   selector: LogSourceSelector | LogSourceSelector[];
   priority?: number;
+  parse_profile?: string | null;
 }
 
 export interface UpdateLogSourceBody {
   label?: string;
   selector?: LogSourceSelector | LogSourceSelector[];
   priority?: number;
+  parse_profile?: string | null;
 }
 
 // ── API key scopes ───────────────────────────────────────────
@@ -266,6 +271,7 @@ export interface MetaResult {
   id: string;
   window_id: string;
   meta_scores: MetaScores;
+  analysis_confidence?: number | null;
   summary: string;
   findings: string[];
   recommended_action?: string;

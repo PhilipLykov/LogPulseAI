@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 
 /**
  * A number input that allows the user to freely type (including clearing
@@ -23,21 +23,13 @@ export function NumericInput({
   onChange,
   min,
   max,
-  step: _step,
   className,
   style,
   disabled,
 }: NumericInputProps) {
   const safeStr = (v: number) => String(isNaN(v) ? (min ?? 0) : v);
   const [raw, setRaw] = useState(safeStr(value));
-  const focused = useRef(false);
-
-  // Sync from parent when not focused
-  useEffect(() => {
-    if (!focused.current) {
-      setRaw(safeStr(value));
-    }
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [isFocused, setIsFocused] = useState(false);
 
   const commit = () => {
     let n = parseFloat(raw);
@@ -52,10 +44,16 @@ export function NumericInput({
     <input
       type="text"
       inputMode="decimal"
-      value={raw}
+      value={isFocused ? raw : safeStr(value)}
       onChange={(e) => setRaw(e.target.value)}
-      onFocus={() => { focused.current = true; }}
-      onBlur={() => { focused.current = false; commit(); }}
+      onFocus={() => {
+        setIsFocused(true);
+        setRaw(safeStr(value));
+      }}
+      onBlur={() => {
+        setIsFocused(false);
+        commit();
+      }}
       onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
       className={className}
       style={style}

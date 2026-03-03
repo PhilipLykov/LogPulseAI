@@ -30,7 +30,7 @@ import {
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
-import { hasPermission } from '../App';
+import { hasPermission } from '../utils/permissions';
 
 /** Auto-refresh interval for findings (ms). */
 const FINDINGS_POLL_INTERVAL = 60_000; // 60 seconds
@@ -757,7 +757,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     setRecalcMsg('');
     try {
       const res = await recalculateScores(system.id);
-      setRecalcMsg(`Recalculated (${res.updated_rows} rows)`);
+      if (res.recalc_status === 'queued') {
+        setRecalcMsg('Recalculation queued. Scores will refresh shortly.');
+      } else {
+        setRecalcMsg(`Recalculated (${res.updated_rows ?? 0} rows)`);
+      }
       setTimeout(() => setRecalcMsg(''), 5000);
 
       if (selectedCriterion) {
@@ -1290,6 +1294,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               <div className="meta-summary-body">
                 {meta.summary}
               </div>
+              {typeof meta.analysis_confidence === 'number' && (
+                <div className="meta-summary-confidence">
+                  <strong>Analysis confidence:</strong> {Math.round(meta.analysis_confidence * 100)}%
+                </div>
+              )}
               {meta.recommended_action && (
                 <div className="meta-summary-recommendation">
                   <strong>Recommended:</strong> {meta.recommended_action}
@@ -1389,6 +1398,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                           {CRITERIA_LABELS[f.criterion_slug] ?? f.criterion_slug}
                         </span>
                       )}
+                      {typeof f.confidence === 'number' && (
+                        <span className="finding-confidence" title="AI confidence for this finding">
+                          {Math.round(f.confidence * 100)}% conf.
+                        </span>
+                      )}
                       <span className="finding-time">
                         {safeDate(f.created_at)}
                         {showLastSeen && (
@@ -1399,6 +1413,21 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                       </span>
                     </div>
                     <p className="finding-text">{f.text}</p>
+                    {Array.isArray(f.mitre_techniques) && f.mitre_techniques.length > 0 && (
+                      <div className="finding-mitre">
+                        <span className="finding-mitre-label">MITRE:</span>
+                        {f.mitre_techniques.slice(0, 8).map((tech) => (
+                          <span key={`${f.id}-${tech}`} className="finding-mitre-technique">
+                            {tech}
+                          </span>
+                        ))}
+                        {f.mitre_techniques.length > 8 && (
+                          <span className="finding-mitre-technique finding-mitre-more" title={f.mitre_techniques.slice(8).join(', ')}>
+                            +{f.mitre_techniques.length - 8} more
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {/* Resolution evidence for resolved findings — with clickable event links */}
                     {f.status === 'resolved' && f.resolution_evidence && (() => {
                       let evidence: { text?: string; event_ids?: string[] } | null = null;

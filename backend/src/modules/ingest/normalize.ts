@@ -58,24 +58,22 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
 
   // Resolve timestamp: try multiple common field names
   let timestamp = entry.timestamp ?? (entry as any).time ?? (entry as any)['@timestamp'];
+  let timestampHadTzInfo = false;
   if (!timestamp) {
     timestamp = new Date().toISOString();
   } else if (typeof timestamp === 'number') {
-    // Unix epoch: handle seconds, milliseconds, microseconds, nanoseconds
+    timestampHadTzInfo = true; // epoch is inherently UTC
     if (timestamp > 1e18) {
-      // Nanoseconds
       timestamp = new Date(timestamp / 1_000_000).toISOString();
     } else if (timestamp > 1e15) {
-      // Microseconds
       timestamp = new Date(timestamp / 1_000).toISOString();
     } else if (timestamp > 1e12) {
-      // Milliseconds
       timestamp = new Date(timestamp).toISOString();
     } else {
-      // Seconds
       timestamp = new Date(timestamp * 1000).toISOString();
     }
   } else if (typeof timestamp === 'string') {
+    timestampHadTzInfo = hasTimezoneInfo(timestamp);
     const d = new Date(timestamp);
     if (isNaN(d.getTime())) {
       timestamp = new Date().toISOString();
@@ -242,6 +240,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     raw: mergedRaw,
     external_id: safeString(entry.external_id),
     connector_id: safeString(entry.connector_id),
+    _timestampHadTzInfo: timestampHadTzInfo,
   };
 }
 
@@ -261,6 +260,21 @@ export function computeNormalizedHash(event: NormalizedEvent): string {
     event.facility ?? '',
   ];
   return createHash('sha256').update(parts.join('\0')).digest('hex');
+}
+
+/**
+ * Detect whether a raw timestamp string already contains timezone information.
+ * If it does, the parsed UTC value is already correct and no per-system
+ * timezone correction should be applied (to avoid double-correction).
+ *
+ * Matches: "Z" suffix, "+HH:MM"/"-HH:MM", "+HHMM"/"-HHMM", "+HH"/"-HH"
+ * at the end of the string (ISO 8601 offset designators).
+ */
+export function hasTimezoneInfo(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (/Z$/i.test(trimmed)) return true;
+  if (/[+-]\d{2}(?::?\d{2})?$/.test(trimmed)) return true;
+  return false;
 }
 
 // ── Timestamp corrections ────────────────────────────────────
@@ -334,7 +348,7 @@ export function applyTimezoneByName(
  * Positive = ahead of UTC (e.g., +120 for EET, +180 for EEST).
  * Returns null if the timezone name is invalid.
  */
-function getUtcOffsetMinutes(date: Date, tzName: string): number | null {
+export function getUtcOffsetMinutes(date: Date, tzName: string): number | null {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: tzName,

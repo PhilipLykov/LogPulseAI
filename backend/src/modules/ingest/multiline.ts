@@ -6,7 +6,7 @@
  * a separate syslog message.  This module detects and merges related lines
  * into single events.
  *
- * Four independent detection methods are used:
+ * Multiple detection methods are used:
  *
  * **Method 1 — `[N-M]` continuation headers** (syslog_sequence_numbers = on):
  *   [5-1] first part of the message
@@ -18,11 +18,15 @@
  *   2026-02-17 01:14:58.777 EET [127949] user@db DETAIL: ...
  *   2026-02-17 01:14:58.777 EET [127949] user@db STATEMENT: ...
  *
- * **Method 3 — Generic fragment detection** (same host + program + second):
- *   Merges lines that look like continuations (key:value, stack traces,
- *   braces) into the nearest head line within the same batch.
+ * **Method 3 — Profile-based multiline rules** (optional):
+ *   For sources with parse profiles, apply the profile's multiline mode
+ *   (`none`, `indent_only`, or `timestamp_head`) before generic fallback.
  *
- * **Method 4 — Cross-batch fragment buffer** (handles split flushes):
+ * **Method 4 — Conservative generic fragment detection**:
+ *   For non-profile entries, only obvious continuation lines (indentation,
+ *   stack traces) are merged into the nearest head.
+ *
+ * **Method 5 — Cross-batch fragment buffer** (handles split flushes):
  *   Orphan fragments with no head in the current batch are held in an
  *   in-memory buffer.  When a matching head arrives in a subsequent batch,
  *   the fragments are merged.  Expired fragments are released as standalone
@@ -37,6 +41,8 @@
 
 import { localTimestamp } from '../../config/index.js';
 import { logger } from '../../config/logger.js';
+import type { LogSourceSelector } from '../../types/index.js';
+import type { ParseProfileMultilineMode } from './parseProfiles.js';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -46,6 +52,14 @@ interface RawEntry {
   host?: string;
   program?: string;
   [key: string]: unknown;
+}
+
+export interface MultilineSourceHint {
+  source_id: string;
+  selector: LogSourceSelector | LogSourceSelector[];
+  parse_profile: string | null;
+  multiline_mode: ParseProfileMultilineMode;
+  multiline_start_re?: RegExp;
 }
 
 // ── Shared helpers ───────────────────────────────────────────────
@@ -63,6 +77,48 @@ function decodeSyslogOctalEscapes(text: string): string {
   return text
     .replace(/#011/g, '\t')
     .replace(/#012/g, '\n');
+}
+
+function matchesSingleSelectorGroupRaw(entry: RawEntry, group: LogSourceSelector): boolean {
+  if (!group || typeof group !== 'object') return false;
+  const rules = Object.entries(group).filter(([, value]) => value !== undefined && value !== '');
+  if (rules.length === 0) return false;
+
+  for (const [field, pattern] of rules) {
+    const rawValue = entry[field];
+    if (rawValue === undefined || rawValue === null) {
+      const wildcard = String(pattern);
+      if (wildcard === '.*' || wildcard === '^.*$' || wildcard === '.+' || wildcard === '^.+$') continue;
+      return false;
+    }
+
+    const eventValue = String(rawValue);
+    try {
+      const regex = new RegExp(String(pattern), 'i');
+      if (!regex.test(eventValue)) return false;
+    } catch {
+      if (eventValue.toLowerCase() !== String(pattern).toLowerCase()) return false;
+    }
+  }
+
+  return true;
+}
+
+function matchesSelectorRaw(entry: RawEntry, selector: LogSourceSelector | LogSourceSelector[]): boolean {
+  if (Array.isArray(selector)) {
+    if (selector.length === 0) return false;
+    return selector.some((group) => matchesSingleSelectorGroupRaw(entry, group));
+  }
+  return matchesSingleSelectorGroupRaw(entry, selector);
+}
+
+function findMatchingSourceHint(entry: RawEntry, sourceHints: MultilineSourceHint[]): MultilineSourceHint | null {
+  for (const hint of sourceHints) {
+    if (matchesSelectorRaw(entry, hint.selector)) {
+      return hint;
+    }
+  }
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -364,46 +420,19 @@ function extractTimestampSecond(e: RawEntry): string | null {
  * Returns true if a message looks like a continuation fragment rather
  * than the start of a new log entry.
  *
- * Detection patterns (checked after GENERIC_HEAD_RE excludes known heads):
+ * Conservative patterns only (to avoid false joins):
  *   1. Indented lines (leading whitespace)
- *   2. Structure continuation chars: { } ) , ] :
- *   3. JS/Java stack trace lines ("at ...")
- *   4. Elided stack frames ("... N lines matching ...")
- *   5. Short key: value lines (schema: undefined, params: 1)
- *   6. Quoted data-structure elements ('foo' ], "key": value, etc.)
- *   7. Lines ending with trailing comma (short)
- *   8. List/diff/separator prefixes (# - + ~ | *)
+ *   2. Java/JS stack trace lines ("at ...")
+ *   3. Elided stack frames ("... N more")
+ *   4. Java chained exceptions ("Caused by:")
  */
 function isFragment(message: string): boolean {
   if (GENERIC_HEAD_RE.test(message)) return false;
 
-  if (/^\s+/.test(message)) return true;                       // indented
-  if (/^[{}),\]:]/.test(message)) return true;                 // structure continuation
-  if (/^at\s+/.test(message)) return true;                     // JS/Java stack trace
-  if (/^\.\.\.\s*\d+\s+/.test(message)) return true;           // "... 4 lines matching ..."
-  if (/^[a-zA-Z_]+:\s/.test(message) && message.length < 80) { // short key: value lines
-    return true;
-  }
-
-  const trimmed = message.trimEnd();
-
-  // Quoted data-structure elements: lines starting with ' or " that end
-  // with a structure character (comma, bracket, brace, paren).
-  // Catches: 'paxcounter' ], "enabled": true, 'device', 'position',
-  if (/^['"]/.test(message) && /[,\]}\)]\s*$/.test(trimmed)) return true;
-
-  // Quoted key-value notation: "key": value  or  'key': value
-  // Catches: "password": "*28KwP...", 'enabled': true
-  if (/^['"][^'"]{1,60}['"]\s*:/.test(message)) return true;
-
-  // Short lines ending with trailing comma — data-structure elements
-  // where leading whitespace was stripped (e.g. by Fluent Bit Lua cleanup).
-  // Catches: true,  null,  42,  someValue,
-  if (trimmed.length < 60 && /,\s*$/.test(trimmed)) return true;
-
-  // List items, diff hunks, separators (never standalone log entries)
-  if (/^[-+~|*#]\s/.test(message) && message.length < 200) return true;
-
+  if (/^\s+/.test(message)) return true;
+  if (/^at\s+/.test(message)) return true;
+  if (/^\.\.\.\s*\d+\s+(?:more|lines?)/i.test(message)) return true;
+  if (/^Caused by:\s+/i.test(message)) return true;
   return false;
 }
 
@@ -526,6 +555,154 @@ function reassembleGenericFragments(
   }
 
   return mergedCount;
+}
+
+interface ProfileGroupEntry {
+  idx: number;
+  entry: RawEntry;
+  message: string;
+  hint: MultilineSourceHint;
+  isHead: boolean;
+}
+
+interface ProfileReassemblyResult {
+  mergedCount: number;
+  matchedIndices: Set<number>;
+  noBufferIndices: Set<number>;
+  hintByIndex: Map<number, MultilineSourceHint>;
+}
+
+function isProfileFragment(message: string, hint: MultilineSourceHint): boolean {
+  if (hint.multiline_mode === 'indent_only') {
+    return /^\s+/.test(message);
+  }
+  if (hint.multiline_mode === 'timestamp_head') {
+    if (hint.multiline_start_re) {
+      hint.multiline_start_re.lastIndex = 0;
+      if (hint.multiline_start_re.test(message)) return false;
+      // In strict timestamp-head mode, every non-head line is treated
+      // as a continuation to keep grouping deterministic for known formats.
+      return true;
+    }
+    return isFragment(message);
+  }
+  return false;
+}
+
+function isProfileHead(message: string, hint: MultilineSourceHint): boolean {
+  if (hint.multiline_mode === 'timestamp_head' && hint.multiline_start_re) {
+    hint.multiline_start_re.lastIndex = 0;
+    return hint.multiline_start_re.test(message);
+  }
+  return !isProfileFragment(message, hint);
+}
+
+function reassembleProfileFragments(
+  entries: unknown[],
+  result: (unknown | null | undefined)[],
+  consumed: Set<number>,
+  sourceHints: MultilineSourceHint[],
+): ProfileReassemblyResult {
+  const groups = new Map<string, ProfileGroupEntry[]>();
+  const matchedIndices = new Set<number>();
+  const noBufferIndices = new Set<number>();
+  const hintByIndex = new Map<number, MultilineSourceHint>();
+
+  for (let i = 0; i < entries.length; i++) {
+    if (consumed.has(i)) continue;
+    if (result[i] !== null) continue;
+
+    const e = entries[i];
+    if (!isValidEntry(e)) continue;
+
+    const hint = findMatchingSourceHint(e, sourceHints);
+    if (!hint) continue;
+
+    matchedIndices.add(i);
+    hintByIndex.set(i, hint);
+
+    // Explicitly disable multiline/buffering for this source profile.
+    if (hint.multiline_mode === 'none') {
+      noBufferIndices.add(i);
+      continue;
+    }
+
+    const ts = extractTimestampSecond(e);
+    if (!ts) continue;
+
+    const key = `${hint.source_id}\0${e.host ?? ''}\0${e.program ?? ''}\0${ts}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+    }
+    group.push({
+      idx: i,
+      entry: e,
+      message: e.message!,
+      hint,
+      isHead: isProfileHead(e.message!, hint),
+    });
+  }
+
+  let mergedCount = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
+    const heads = group.filter((item) => item.isHead);
+    if (heads.length === 0) continue;
+
+    for (let h = 0; h < heads.length; h++) {
+      const head = heads[h];
+      const headIdx = group.indexOf(head);
+      const nextHeadIdx = h + 1 < heads.length ? group.indexOf(heads[h + 1]) : group.length;
+
+      const fragments: ProfileGroupEntry[] = [];
+      for (let f = headIdx + 1; f < nextHeadIdx && fragments.length < MAX_FRAGMENT_MERGE - 1; f++) {
+        if (!group[f].isHead) {
+          fragments.push(group[f]);
+        }
+      }
+
+      if (fragments.length === 0) continue;
+
+      const mergedMessage = [head.message, ...fragments.map((frag) => frag.message)].join('\n');
+      result[head.idx] = { ...head.entry, message: mergedMessage };
+      consumed.add(head.idx);
+
+      for (const frag of fragments) {
+        result[frag.idx] = undefined;
+        consumed.add(frag.idx);
+        mergedCount++;
+      }
+    }
+
+    const firstHead = heads[0];
+    const firstHeadIdx = group.indexOf(firstHead);
+    const leadingFragments: ProfileGroupEntry[] = [];
+    for (let i = 0; i < firstHeadIdx && leadingFragments.length < MAX_FRAGMENT_MERGE - 1; i++) {
+      if (!group[i].isHead && !consumed.has(group[i].idx)) {
+        leadingFragments.push(group[i]);
+      }
+    }
+
+    if (leadingFragments.length > 0) {
+      const currentMessage = result[firstHead.idx]
+        ? ((result[firstHead.idx] as RawEntry).message ?? firstHead.message)
+        : firstHead.message;
+      const mergedMessage = [...leadingFragments.map((frag) => frag.message), currentMessage].join('\n');
+      const baseEntry = (result[firstHead.idx] as RawEntry | null) ?? firstHead.entry;
+      result[firstHead.idx] = { ...baseEntry, message: mergedMessage };
+      consumed.add(firstHead.idx);
+      for (const frag of leadingFragments) {
+        result[frag.idx] = undefined;
+        consumed.add(frag.idx);
+        mergedCount++;
+      }
+    }
+  }
+
+  return { mergedCount, matchedIndices, noBufferIndices, hintByIndex };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -664,18 +841,23 @@ export function _resetFragmentBuffer(): void {
 /**
  * Reassemble multiline syslog entries in a batch.
  *
- * Applies four independent detection methods:
+ * Applies independent detection methods:
  *   1. `[N-M]` continuation headers (group-based, handles interleaving)
  *   2. PID + timestamp grouping for standard PostgreSQL log prefix
- *   3. Generic fragment detection (same host + program + second)
- *   4. Cross-batch fragment buffer (holds orphans for next batch)
+ *   3. Profile-based multiline handling (if parse profiles are configured)
+ *   4. Conservative generic fragment detection (same host + program + second)
+ *   5. Cross-batch fragment buffer (holds orphans for next batch)
  *
  * Entries that do not match any multiline pattern pass through unchanged.
  *
- * @param entries - Array of raw ingest entries (pre-normalisation).
+ * @param entries - Array of raw ingest entries (pre-normalisation)
+ * @param sourceHints - Optional preloaded source/profile hints
  * @returns A new array with merged entries (length <= entries.length).
  */
-export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
+export function reassembleMultilineEntries(
+  entries: unknown[],
+  sourceHints: MultilineSourceHint[] = [],
+): unknown[] {
   const now = Date.now();
 
   // Flush expired buffer fragments → they re-enter the pipeline as standalone
@@ -691,24 +873,41 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
   // result[i] = undefined means "consumed by a merge, skip"
   // result[i] = object means "placed (merged or orphan-stripped)"
   const result: (unknown | null | undefined)[] = new Array(safeEntries.length).fill(null);
+  const allConsumed = new Set<number>();
+  const noBufferIndices = new Set<number>();
+  const profileHintByIndex = new Map<number, MultilineSourceHint>();
 
   if (safeEntries.length > 1) {
     // Method 1: [N-M] continuation headers
     const nmConsumed = reassembleNM(safeEntries, result);
+    for (const idx of nmConsumed) allConsumed.add(idx);
 
     // Method 2: PID + timestamp grouping (on remaining entries)
     reassemblePgLogPrefix(safeEntries, result, nmConsumed);
 
-    // Method 3: Generic fragment detection (on remaining entries)
-    const allConsumed = new Set(nmConsumed);
+    // Mark entries already placed/consumed by Methods 1/2.
     for (let i = 0; i < result.length; i++) {
       if (result[i] !== null && result[i] !== undefined) allConsumed.add(i);
       if (result[i] === undefined) allConsumed.add(i);
     }
+  }
+
+  // Method 3: Profile-based multiline handling (if configured).
+  // Runs even for single-entry batches, because profiles may explicitly
+  // disable cross-batch buffering (`multiline_mode = 'none'`).
+  if (sourceHints.length > 0) {
+    const profileResult = reassembleProfileFragments(safeEntries, result, allConsumed, sourceHints);
+    for (const idx of profileResult.matchedIndices) allConsumed.add(idx);
+    for (const idx of profileResult.noBufferIndices) noBufferIndices.add(idx);
+    for (const [idx, hint] of profileResult.hintByIndex) profileHintByIndex.set(idx, hint);
+  }
+
+  if (safeEntries.length > 1) {
+    // Method 4: Conservative generic fragment detection for non-profile entries
     reassembleGenericFragments(safeEntries, result, allConsumed);
   }
 
-  // Method 4: Cross-batch buffer — merge buffered fragments into heads,
+  // Method 5: Cross-batch buffer — merge buffered fragments into heads,
   // buffer new orphan fragments, and release expired ones.
   const output: unknown[] = [];
   let mergedFromBuffer = 0;
@@ -732,8 +931,15 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
     const re = entry as RawEntry;
     const msg = re.message!;
     const wasProcessedByMethod = result[i] !== null;
+    const profileHint = profileHintByIndex.get(i);
+    const lineLooksLikeFragment = profileHint ? isProfileFragment(msg, profileHint) : isFragment(msg);
 
-    if (wasProcessedByMethod || !isFragment(msg)) {
+    if (noBufferIndices.has(i)) {
+      output.push(entry);
+      continue;
+    }
+
+    if (wasProcessedByMethod || !lineLooksLikeFragment) {
       // Head or already-merged entry — check buffer for matching fragments
       const merged = tryMergeFromBuffer(re);
       if (merged) {

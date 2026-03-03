@@ -7,7 +7,9 @@ import {
   updateApiKey,
   revokeApiKey,
 } from '../api';
-import { EuDateInput, euToIso } from './EuDateInput';
+import { EuDateInput } from './EuDateInput';
+import { ConfirmDialog } from './ConfirmDialog';
+import { euToIso, formatEuDateTime } from '../utils/dateTime';
 
 const SCOPES = [
   { value: 'admin', label: 'Admin (full access)' },
@@ -37,6 +39,14 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
   // Newly created key (shown once)
   const [createdKey, setCreatedKey] = useState<CreateApiKeyResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<ApiKeyInfo | null>(null);
+  const [revoking, setRevoking] = useState(false);
+
+  const handleApiError = useCallback((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Authentication')) onAuthError();
+    setError(msg);
+  }, [onAuthError]);
 
   const load = useCallback(async () => {
     try {
@@ -44,13 +54,11 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
       const data = await fetchApiKeys();
       setKeys(data);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Authentication')) onAuthError();
-      setError(msg);
+      handleApiError(err);
     } finally {
       setLoading(false);
     }
-  }, [onAuthError]);
+  }, [handleApiError]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -74,22 +82,30 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
       setNewExpires('');
       await load();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleApiError(err);
     } finally {
       setCreating(false);
     }
   };
 
   const handleRevoke = async (key: ApiKeyInfo) => {
-    if (!confirm(`Revoke API key "${key.name}"? This cannot be undone.`)) return;
+    setPendingRevoke(key);
+  };
+
+  const confirmRevoke = async () => {
+    if (!pendingRevoke) return;
     setError('');
     setSuccess('');
+    setRevoking(true);
     try {
-      await revokeApiKey(key.id);
-      setSuccess(`API key "${key.name}" revoked.`);
+      await revokeApiKey(pendingRevoke.id);
+      setSuccess(`API key "${pendingRevoke.name}" revoked.`);
       await load();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleApiError(err);
+    } finally {
+      setRevoking(false);
+      setPendingRevoke(null);
     }
   };
 
@@ -101,7 +117,7 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
       setSuccess(`API key "${key.name}" ${key.is_active ? 'disabled' : 'enabled'}.`);
       await load();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      handleApiError(err);
     }
   };
 
@@ -120,18 +136,6 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  };
-
-  const fmtDate = (d: string | null) => {
-    if (!d) return '—';
-    const dt = new Date(d);
-    if (isNaN(dt.getTime())) return d;
-    const dd = String(dt.getDate()).padStart(2, '0');
-    const mm = String(dt.getMonth() + 1).padStart(2, '0');
-    const yyyy = dt.getFullYear();
-    const hh = String(dt.getHours()).padStart(2, '0');
-    const min = String(dt.getMinutes()).padStart(2, '0');
-    return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
   };
 
   if (loading) {
@@ -243,8 +247,8 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
                     )}
                   </td>
                   <td>{k.created_by_username || '—'}</td>
-                  <td className="admin-date-cell">{fmtDate(k.expires_at)}</td>
-                  <td className="admin-date-cell">{fmtDate(k.last_used_at)}</td>
+                  <td className="admin-date-cell">{formatEuDateTime(k.expires_at)}</td>
+                  <td className="admin-date-cell">{formatEuDateTime(k.last_used_at)}</td>
                   <td>
                     <div className="admin-action-group">
                       <button
@@ -267,6 +271,17 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
           </table>
         </div>
       </div>
+      {pendingRevoke && (
+        <ConfirmDialog
+          title="Revoke API Key"
+          message={`Revoke API key "${pendingRevoke.name}"? This cannot be undone.`}
+          confirmLabel="Revoke"
+          danger
+          saving={revoking}
+          onConfirm={confirmRevoke}
+          onCancel={() => setPendingRevoke(null)}
+        />
+      )}
     </div>
   );
 }

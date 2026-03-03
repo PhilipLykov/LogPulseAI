@@ -21,7 +21,7 @@ import { getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents, matchesNormalBehavior } from './normalBehavior.js';
 import { logger } from '../../config/logger.js';
 
-const DEFAULT_W_META = 0.7;
+import { DEFAULT_W_META } from '../events/recalcScores.js';
 /** Default number of previous window summaries to include as context. */
 const DEFAULT_CONTEXT_WINDOW_SIZE = 5;
 
@@ -98,6 +98,8 @@ export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConf
 /** Extended open finding — includes internal DB fields used within the pipeline. */
 interface ExtendedOpenFinding {
   index: number; text: string; severity: string; criterion?: string;
+  confidence?: number;
+  mitre_techniques?: string[];
   status?: string; created_at?: string; last_seen_at?: string;
   occurrence_count?: number; reopen_count?: number; is_flapping?: boolean;
   _dbId: string; _fingerprint?: string; _occurrence_count: number; _consecutive_misses: number;
@@ -223,6 +225,7 @@ export async function metaAnalyzeWindow(
       id: uuidv4(),
       window_id: windowId,
       meta_scores: JSON.stringify(zeroMetaScores),
+      analysis_confidence: null,
       summary: 'No significant events detected in the current analysis window. All monitored events match normal operational patterns.',
       findings: JSON.stringify([]),
       recommended_action: null,
@@ -294,29 +297,30 @@ export async function metaAnalyzeWindow(
 
       const zeroMetaScores: Record<string, number> = {};
       for (const c of CRITERIA) { zeroMetaScores[c.slug] = 0; }
-      await db('meta_results').insert({
-        id: uuidv4(),
-        window_id: windowId,
-        meta_scores: JSON.stringify(zeroMetaScores),
-        summary: 'All events in this window scored as routine. No significant issues detected.',
-        findings: JSON.stringify([]),
-        recommended_action: null,
-        key_event_ids: null,
-      });
 
-      // Still process finding lifecycle (check dormancy for open findings)
-      // but skip the LLM call and finding creation
-      const context = await buildMetaContext(
-        db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
-        { excludeAcknowledged: effectiveExcludeAcked },
-      );
-      if (context.openFindings.length > 0) {
-        // Increment consecutive_misses for all open findings (none were seen)
-        await db('findings')
-          .where({ system_id: system.id })
-          .whereIn('status', ['open', 'acknowledged'])
-          .increment('consecutive_misses', 1);
-      }
+      await db.transaction(async (trx) => {
+        await trx('meta_results').insert({
+          id: uuidv4(),
+          window_id: windowId,
+          meta_scores: JSON.stringify(zeroMetaScores),
+          analysis_confidence: null,
+          summary: 'All events in this window scored as routine. No significant issues detected.',
+          findings: JSON.stringify([]),
+          recommended_action: null,
+          key_event_ids: null,
+        });
+
+        const context = await buildMetaContext(
+          trx as unknown as typeof db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+          { excludeAcknowledged: effectiveExcludeAcked },
+        );
+        if (context.openFindings.length > 0) {
+          await trx('findings')
+            .where({ system_id: system.id })
+            .whereIn('status', ['open', 'acknowledged'])
+            .increment('consecutive_misses', 1);
+        }
+      });
 
       return;
     }
@@ -773,13 +777,13 @@ export async function metaAnalyzeWindow(
   findingsToInsert = remainingToInsert;
 
   // ── Persist everything in a transaction ─────────────────
+  const metaId = uuidv4();
   await db.transaction(async (trx) => {
-    // Store meta_result (findings field kept for backward compat / fallback display)
-    const metaId = uuidv4();
     await trx('meta_results').insert({
       id: metaId,
       window_id: windowId,
       meta_scores: JSON.stringify(result.meta_scores),
+      analysis_confidence: result.analysis_confidence ?? null,
       summary: result.summary,
       findings: JSON.stringify(result.findingsFlat),
       recommended_action: result.recommended_action ?? null,
@@ -833,6 +837,10 @@ export async function metaAnalyzeWindow(
         text: finding.text,
         severity: finding.severity,
         criterion_slug: finding.criterion ?? null,
+        confidence: typeof finding.confidence === 'number' ? finding.confidence : null,
+        mitre_techniques: finding.mitre_techniques?.length
+          ? JSON.stringify(finding.mitre_techniques.slice(0, 25))
+          : null,
         status: 'open',
         fingerprint: computeFingerprint(finding.text),
         last_seen_at: nowIso,
@@ -1263,8 +1271,7 @@ export async function metaAnalyzeWindow(
   try {
     if (eventIndexToId.size > 0) {
       const orphans = await db('findings')
-        .where({ system_id: system.id })
-        .whereIn('status', ['open', 'acknowledged'])
+        .where({ system_id: system.id, meta_result_id: metaId })
         .whereNull('key_event_ids')
         .select('id', 'text')
         .limit(50);
@@ -1344,7 +1351,7 @@ async function buildMetaContext(
     .whereIn('status', findingStatuses)
     .orderBy('created_at', 'desc')
     .limit(30)
-    .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
+    .select('id', 'text', 'severity', 'criterion_slug', 'confidence', 'mitre_techniques', 'fingerprint',
             'occurrence_count', 'consecutive_misses', 'status',
             'created_at', 'last_seen_at', 'reopen_count', 'is_flapping');
 
@@ -1353,6 +1360,12 @@ async function buildMetaContext(
     text: f.text,
     severity: f.severity,
     criterion: f.criterion_slug ?? undefined,
+    confidence: typeof f.confidence === 'number' ? f.confidence : undefined,
+    mitre_techniques: Array.isArray(f.mitre_techniques)
+      ? f.mitre_techniques
+      : (typeof f.mitre_techniques === 'string'
+        ? safeJsonStringArray(f.mitre_techniques)
+        : undefined),
     status: f.status,
     created_at: f.created_at ?? undefined,
     last_seen_at: f.last_seen_at ?? undefined,
@@ -1412,6 +1425,17 @@ function significantWords(text: string): Set<string> {
     }
   }
   return result;
+}
+
+function safeJsonStringArray(raw: string): string[] | undefined {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const out = parsed.filter((v: unknown) => typeof v === 'string') as string[];
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

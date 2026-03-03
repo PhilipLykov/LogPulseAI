@@ -7,6 +7,75 @@ import { localTimestamp } from '../../config/index.js';
 import { invalidateSourceCache } from '../ingest/sourceMatch.js';
 import type { CreateLogSourceBody, UpdateLogSourceBody } from '../../types/index.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
+import { getParseProfile, listParseProfileSummaries } from '../ingest/parseProfiles.js';
+
+const MAX_SELECTOR_GROUPS = 10;
+const MAX_SELECTOR_RULES_PER_GROUP = 20;
+const MAX_SELECTOR_PATTERN_LEN = 512;
+
+function validateAndNormalizeSelector(
+  selectorInput: unknown,
+): { ok: true; selector: Record<string, string> | Record<string, string>[] } | { ok: false; error: string } {
+  const fromArray = Array.isArray(selectorInput);
+  const groups = fromArray ? selectorInput : [selectorInput];
+
+  if (groups.length === 0) {
+    return { ok: false, error: '"selector" must include at least one group.' };
+  }
+  if (groups.length > MAX_SELECTOR_GROUPS) {
+    return { ok: false, error: `"selector" has too many groups (max ${MAX_SELECTOR_GROUPS}).` };
+  }
+
+  const normalizedGroups: Record<string, string>[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) {
+      return { ok: false, error: '"selector" must be an object or array of objects.' };
+    }
+
+    const entries = Object.entries(group as Record<string, unknown>);
+    if (entries.length === 0) {
+      return { ok: false, error: 'Each selector group must contain at least one field rule.' };
+    }
+    if (entries.length > MAX_SELECTOR_RULES_PER_GROUP) {
+      return { ok: false, error: `Selector group has too many rules (max ${MAX_SELECTOR_RULES_PER_GROUP}).` };
+    }
+
+    const normalizedGroup: Record<string, string> = {};
+    for (const [fieldRaw, patternRaw] of entries) {
+      const field = String(fieldRaw).trim();
+      if (!field) {
+        return { ok: false, error: 'Selector field names must be non-empty strings.' };
+      }
+      if (typeof patternRaw !== 'string') {
+        return { ok: false, error: `Selector pattern for field "${field}" must be a string.` };
+      }
+      const pattern = patternRaw.trim();
+      if (!pattern) {
+        return { ok: false, error: `Selector pattern for field "${field}" must be non-empty.` };
+      }
+      if (pattern.length > MAX_SELECTOR_PATTERN_LEN) {
+        return {
+          ok: false,
+          error: `Selector pattern for field "${field}" is too long (max ${MAX_SELECTOR_PATTERN_LEN} chars).`,
+        };
+      }
+      try {
+        // Compile once to fail fast on invalid regex.
+        new RegExp(pattern, 'i');
+      } catch {
+        return { ok: false, error: `Selector pattern for field "${field}" is not a valid regex.` };
+      }
+      normalizedGroup[field] = pattern;
+    }
+
+    normalizedGroups.push(normalizedGroup);
+  }
+
+  return {
+    ok: true,
+    selector: fromArray ? normalizedGroups : normalizedGroups[0],
+  };
+}
 
 /**
  * CRUD for log_sources.
@@ -14,6 +83,15 @@ import { writeAuditLog, getActorName } from '../../middleware/audit.js';
  */
 export async function registerSourceRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
+
+  // ── PARSE PROFILE CATALOG ────────────────────────────────────
+  app.get(
+    '/api/v1/parse-profiles',
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
+    async (_request, reply) => {
+      return reply.send(listParseProfileSummaries());
+    },
+  );
 
   // ── LIST (all or by system) ─────────────────────────────────
   app.get<{ Querystring: { system_id?: string } }>(
@@ -57,7 +135,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/sources',
     { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
-      const { system_id, label, selector, priority } = request.body ?? {};
+      const { system_id, label, selector, priority, parse_profile } = request.body ?? {};
 
       if (!system_id || typeof system_id !== 'string') {
         return reply.code(400).send({ error: '"system_id" is required.' });
@@ -65,14 +143,20 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
         return reply.code(400).send({ error: '"label" is required and must be a non-empty string.' });
       }
-      const isValidSelector = (s: unknown): boolean => {
-        if (Array.isArray(s)) {
-          return s.length > 0 && s.every(g => g && typeof g === 'object' && !Array.isArray(g));
+      const validatedSelector = validateAndNormalizeSelector(selector);
+      if (!validatedSelector.ok) {
+        return reply.code(400).send({ error: validatedSelector.error });
+      }
+
+      let parseProfileValue: string | null = null;
+      if (parse_profile !== undefined && parse_profile !== null && parse_profile !== '') {
+        if (typeof parse_profile !== 'string') {
+          return reply.code(400).send({ error: '"parse_profile" must be a string or null.' });
         }
-        return s !== null && typeof s === 'object' && !Array.isArray(s);
-      };
-      if (!isValidSelector(selector)) {
-        return reply.code(400).send({ error: '"selector" must be an object or array of objects.' });
+        if (!getParseProfile(parse_profile)) {
+          return reply.code(400).send({ error: `"parse_profile" "${parse_profile}" is not recognized.` });
+        }
+        parseProfileValue = parse_profile;
       }
 
       // Verify system exists
@@ -86,8 +170,9 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
         id,
         system_id,
         label: label.trim(),
-        selector: JSON.stringify(selector),
+        selector: JSON.stringify(validatedSelector.selector),
         priority: priority ?? 0,
+        parse_profile: parseProfileValue,
         created_at: now,
         updated_at: now,
       });
@@ -100,7 +185,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
         action: 'source_create',
         resource_type: 'log_source',
         resource_id: id,
-        details: { label: label.trim(), system_id },
+        details: { label: label.trim(), system_id, parse_profile: parseProfileValue },
         ip: request.ip,
         user_id: request.currentUser?.id,
         session_id: request.currentSession?.id,
@@ -124,7 +209,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       const existing = await db('log_sources').where({ id }).first();
       if (!existing) return reply.code(404).send({ error: 'Log source not found' });
 
-      const { label, selector, priority } = request.body ?? {};
+      const { label, selector, priority, parse_profile } = request.body ?? {};
       const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
       if (label !== undefined) {
@@ -134,16 +219,11 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
         updates.label = label.trim();
       }
       if (selector !== undefined) {
-        const isValidSelector = (s: unknown): boolean => {
-          if (Array.isArray(s)) {
-            return s.length > 0 && s.every(g => g && typeof g === 'object' && !Array.isArray(g));
-          }
-          return s !== null && typeof s === 'object' && !Array.isArray(s);
-        };
-        if (!isValidSelector(selector)) {
-          return reply.code(400).send({ error: '"selector" must be an object or array of objects.' });
+        const validatedSelector = validateAndNormalizeSelector(selector);
+        if (!validatedSelector.ok) {
+          return reply.code(400).send({ error: validatedSelector.error });
         }
-        updates.selector = JSON.stringify(selector);
+        updates.selector = JSON.stringify(validatedSelector.selector);
       }
       if (priority !== undefined) {
         const parsedPriority = Number(priority);
@@ -151,6 +231,17 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
           return reply.code(400).send({ error: '"priority" must be a number.' });
         }
         updates.priority = parsedPriority;
+      }
+      if (parse_profile !== undefined) {
+        if (parse_profile === null || parse_profile === '') {
+          updates.parse_profile = null;
+        } else if (typeof parse_profile !== 'string') {
+          return reply.code(400).send({ error: '"parse_profile" must be a string or null.' });
+        } else if (!getParseProfile(parse_profile)) {
+          return reply.code(400).send({ error: `"parse_profile" "${parse_profile}" is not recognized.` });
+        } else {
+          updates.parse_profile = parse_profile;
+        }
       }
 
       await db('log_sources').where({ id }).update(updates);

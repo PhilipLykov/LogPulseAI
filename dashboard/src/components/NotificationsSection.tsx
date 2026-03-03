@@ -12,12 +12,13 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { AlertRulesPanel } from './AlertRulesPanel';
 import { AlertHistoryPanel } from './AlertHistoryPanel';
 import { SilencesPanel } from './SilencesPanel';
+import { ScheduledReportsPanel } from './ScheduledReportsPanel';
 
 interface NotificationsSectionProps {
   onAuthError: () => void;
 }
 
-type NotifSubTab = 'channels' | 'rules' | 'history' | 'silences';
+type NotifSubTab = 'channels' | 'rules' | 'history' | 'silences' | 'reports';
 
 // ── Channel type metadata ────────────────────────────────────
 
@@ -264,6 +265,14 @@ export function NotificationsSection({ onAuthError }: NotificationsSectionProps)
         >
           Silences
         </button>
+        <button
+          className={`notif-pill${subTab === 'reports' ? ' active' : ''}`}
+          onClick={() => setSubTab('reports')}
+          role="tab"
+          aria-selected={subTab === 'reports'}
+        >
+          Scheduled Reports
+        </button>
       </div>
 
       {/* ── Sub-tab content ── */}
@@ -273,6 +282,8 @@ export function NotificationsSection({ onAuthError }: NotificationsSectionProps)
         <AlertHistoryPanel onAuthError={onAuthError} />
       ) : subTab === 'silences' ? (
         <SilencesPanel onAuthError={onAuthError} />
+      ) : subTab === 'reports' ? (
+        <ScheduledReportsPanel onAuthError={onAuthError} />
       ) : (
       /* ── Channels panel (inline, existing code) ── */
       <>

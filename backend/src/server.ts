@@ -8,6 +8,7 @@ import { OpenAiAdapter } from './modules/llm/adapter.js';
 import { startPipelineScheduler } from './modules/pipeline/orchestrator.js';
 import { startConnectorScheduler } from './modules/connectors/runner.js';
 import { startMaintenanceScheduler } from './modules/maintenance/maintenanceJob.js';
+import { startScheduledReportScheduler } from './modules/alerting/scheduledReports.js';
 import { closeAllEsClients } from './services/esClient.js';
 
 /**
@@ -56,9 +57,14 @@ async function main(): Promise<void> {
   const maintenanceCheckMs = envIntervalMs(process.env.MAINTENANCE_CHECK_INTERVAL_MS, 30 * 60 * 1000);
   const maintenanceScheduler = startMaintenanceScheduler(db, maintenanceCheckMs);
 
+  // 7. Start scheduled-report scheduler
+  const scheduledReportsIntervalMs = envIntervalMs(process.env.SCHEDULED_REPORT_CHECK_INTERVAL_MS, 60_000);
+  const scheduledReportScheduler = startScheduledReportScheduler(db, scheduledReportsIntervalMs);
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`[${localTimestamp()}] Received ${signal}, shutting down…`);
+    scheduledReportScheduler.stop();
     maintenanceScheduler.stop();
     connectorScheduler.stop();
     pipelineScheduler?.stop();

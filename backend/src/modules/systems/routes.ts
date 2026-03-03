@@ -7,6 +7,7 @@ import { localTimestamp } from '../../config/index.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import type { CreateSystemBody, UpdateSystemBody } from '../../types/index.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
+import { getUtcOffsetMinutes } from '../ingest/normalize.js';
 
 /**
  * CRUD for monitored_systems.
@@ -277,4 +278,150 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(204).send();
     },
   );
+
+  // ── DETECT TIMEZONE ──────────────────────────────────────────
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/systems/:id/detect-timezone',
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
+    async (request, reply) => {
+      const { id } = request.params;
+      const system = await db('monitored_systems').where({ id }).first();
+      if (!system) {
+        return reply.code(404).send({ error: 'System not found.' });
+      }
+
+      if (system.event_source === 'elasticsearch') {
+        return reply.send({
+          detected: false,
+          reason: 'Auto-detection is not available for Elasticsearch-sourced systems.',
+        });
+      }
+
+      // Query recent events: compare event timestamp vs received_at.
+      // received_at is set by the DB (server time, UTC) when the row is inserted.
+      // If no TZ correction is configured, timestamp drifts from received_at
+      // by exactly the source's UTC offset.
+      const rows = await db('events')
+        .where({ system_id: id })
+        .whereRaw(`received_at > now() - interval '24 hours'`)
+        .whereRaw(`abs(extract(epoch from ("timestamp" - received_at))) < 86400`)
+        .orderBy('received_at', 'desc')
+        .select(
+          db.raw(`extract(epoch from ("timestamp" - received_at)) as drift_seconds`),
+          db.raw(`received_at`),
+        )
+        .limit(500);
+
+      if (rows.length < 20) {
+        return reply.send({
+          detected: false,
+          reason: `Not enough recent events (${rows.length}/20 required). Need at least 20 events in the last 24 hours.`,
+        });
+      }
+
+      // Check time span: events must span at least 3 hours of received_at
+      const receivedTimes = rows.map((r: any) => new Date(r.received_at).getTime());
+      const spanMs = Math.max(...receivedTimes) - Math.min(...receivedTimes);
+      const spanHours = spanMs / (3600 * 1000);
+      if (spanHours < 3) {
+        return reply.send({
+          detected: false,
+          reason: `Events span only ${spanHours.toFixed(1)} hours (3 hours minimum). Wait for more events to arrive.`,
+        });
+      }
+
+      // Compute drifts and find median
+      const drifts = rows
+        .map((r: any) => Number(r.drift_seconds))
+        .filter((d: number) => Number.isFinite(d))
+        .sort((a: number, b: number) => a - b);
+
+      if (drifts.length < 20) {
+        return reply.send({
+          detected: false,
+          reason: 'Not enough valid drift measurements.',
+        });
+      }
+
+      const median = drifts[Math.floor(drifts.length / 2)];
+      const medianMinutes = Math.round(median / 60);
+
+      // Round to nearest 15-minute multiple (standard TZ offsets)
+      const roundedMinutes = Math.round(medianMinutes / 15) * 15;
+
+      // Check consistency: interquartile range should be < 10 minutes
+      const q1 = drifts[Math.floor(drifts.length * 0.25)] / 60;
+      const q3 = drifts[Math.floor(drifts.length * 0.75)] / 60;
+      const iqrMinutes = q3 - q1;
+      if (iqrMinutes > 10) {
+        return reply.send({
+          detected: false,
+          reason: `Drift measurements are too inconsistent (IQR: ${iqrMinutes.toFixed(1)} min). Timestamps may come from mixed sources with different timezones.`,
+        });
+      }
+
+      if (Math.abs(roundedMinutes) < 15) {
+        return reply.send({
+          detected: false,
+          reason: 'No significant timezone offset detected. Timestamps appear to already be in UTC.',
+        });
+      }
+
+      // Try to find the best matching IANA timezone
+      const now = new Date();
+      const candidateTimezone = findMatchingTimezone(roundedMinutes, now);
+
+      const sign = roundedMinutes > 0 ? '+' : '-';
+      const absH = Math.floor(Math.abs(roundedMinutes) / 60);
+      const absM = Math.abs(roundedMinutes) % 60;
+      const offsetLabel = `UTC${sign}${String(absH).padStart(2, '0')}:${String(absM).padStart(2, '0')}`;
+
+      return reply.send({
+        detected: true,
+        offset_minutes: roundedMinutes,
+        offset_label: offsetLabel,
+        suggested_tz_name: candidateTimezone,
+        sample_count: drifts.length,
+        span_hours: Math.round(spanHours * 10) / 10,
+        median_drift_minutes: Math.round(medianMinutes * 10) / 10,
+        iqr_minutes: Math.round(iqrMinutes * 10) / 10,
+        current_tz_name: system.tz_name ?? null,
+        current_tz_offset: system.tz_offset_minutes ?? null,
+      });
+    },
+  );
+}
+
+/**
+ * Find the best-matching IANA timezone for a given UTC offset (in minutes).
+ * Prefers well-known timezone names over obscure ones.
+ */
+function findMatchingTimezone(offsetMinutes: number, referenceDate: Date): string | null {
+  const COMMON_ZONES = [
+    'Pacific/Honolulu', 'America/Anchorage', 'America/Los_Angeles', 'America/Denver',
+    'America/Chicago', 'America/New_York', 'America/Sao_Paulo', 'Atlantic/Azores',
+    'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Helsinki',
+    'Europe/Bucharest', 'Europe/Chisinau', 'Europe/Moscow', 'Asia/Dubai',
+    'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Shanghai',
+    'Asia/Tokyo', 'Australia/Sydney', 'Pacific/Auckland',
+    'Africa/Cairo', 'Africa/Johannesburg', 'Asia/Jerusalem', 'Asia/Singapore',
+  ];
+
+  for (const tz of COMMON_ZONES) {
+    const actual = getUtcOffsetMinutes(referenceDate, tz);
+    if (actual === offsetMinutes) return tz;
+  }
+
+  // Fallback: try all Intl-supported timezones via a broader search
+  try {
+    const allZones = (Intl as any).supportedValuesOf?.('timeZone') as string[] | undefined;
+    if (allZones) {
+      for (const tz of allZones) {
+        const actual = getUtcOffsetMinutes(referenceDate, tz);
+        if (actual === offsetMinutes) return tz;
+      }
+    }
+  } catch { /* Intl.supportedValuesOf not available in older runtimes */ }
+
+  return null;
 }

@@ -3,9 +3,10 @@ import type { Knex } from 'knex';
 import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { getConnectorAdapter } from './registry.js';
-import { normalizeEntry, computeNormalizedHash } from '../ingest/normalize.js';
+import { normalizeEntry, computeNormalizedHash, applyTimezoneByName, applyTimezoneOffset } from '../ingest/normalize.js';
 import { redactEvent } from '../ingest/redact.js';
 import { matchSource } from '../ingest/sourceMatch.js';
+import { applyProfileExtraction, getParseProfile } from '../ingest/parseProfiles.js';
 import { validateUrl } from './urlValidation.js';
 
 /**
@@ -53,7 +54,24 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
         continue;
       }
 
-      // Normalize, redact, source match, persist
+      // Pre-load per-system timezone settings (same as ingest route)
+      const tzOffsetMap = new Map<string, number>();
+      const tzNameMap = new Map<string, string>();
+      try {
+        const systems = await db('monitored_systems')
+          .where(function() {
+            this.whereNotNull('tz_offset_minutes').orWhereNotNull('tz_name');
+          })
+          .select('id', 'tz_offset_minutes', 'tz_name');
+        for (const sys of systems) {
+          if (sys.tz_name && typeof sys.tz_name === 'string') {
+            tzNameMap.set(sys.id, sys.tz_name);
+          } else if (typeof sys.tz_offset_minutes === 'number' && sys.tz_offset_minutes !== 0) {
+            tzOffsetMap.set(sys.id, sys.tz_offset_minutes);
+          }
+        }
+      } catch { /* non-critical */ }
+
       const receivedAt = new Date().toISOString();
       const rows: any[] = [];
 
@@ -66,6 +84,26 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
 
         const sourceMatch = await matchSource(db, normalized);
         if (!sourceMatch) continue;
+
+        if (sourceMatch.parse_profile) {
+          const profile = getParseProfile(sourceMatch.parse_profile);
+          if (profile) {
+            applyProfileExtraction(normalized, profile);
+          }
+        }
+
+        // Apply per-system timezone correction (same logic as ingest route)
+        if (!normalized._timestampHadTzInfo) {
+          const tzName = tzNameMap.get(sourceMatch.system_id);
+          if (tzName) {
+            normalized.timestamp = applyTimezoneByName(normalized.timestamp, tzName);
+          } else {
+            const tzOffset = tzOffsetMap.get(sourceMatch.system_id);
+            if (tzOffset) {
+              normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+            }
+          }
+        }
 
         const redacted = redactEvent(normalized);
         const hash = computeNormalizedHash(redacted);
@@ -95,7 +133,10 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
       if (rows.length > 0) {
         await db.transaction(async (trx) => {
           for (let i = 0; i < rows.length; i += 100) {
-            await trx('events').insert(rows.slice(i, i + 100));
+            await trx('events')
+              .insert(rows.slice(i, i + 100))
+              .onConflict(['normalized_hash', 'timestamp'])
+              .ignore();
           }
           if (newCursor) {
             await upsertCursorTrx(trx, conn.id, newCursor);

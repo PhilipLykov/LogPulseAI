@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   type EsConnection,
+  type EsConnectionCreatePayload,
   type EsIndex,
   type EsFieldMapping,
   fetchEsConnections,
@@ -123,7 +124,7 @@ export function ElasticsearchSettings({ onAuthError }: Props) {
           is_default: editConn.is_default,
         });
       } else if (editConn.id) {
-        const payload: Record<string, unknown> = {};
+        const payload: Partial<EsConnectionCreatePayload> = {};
         if (editConn.name !== undefined) payload.name = editConn.name;
         if (editConn.url !== undefined) payload.url = editConn.url;
         if (editConn.auth_type !== undefined) payload.auth_type = editConn.auth_type;
@@ -131,12 +132,12 @@ export function ElasticsearchSettings({ onAuthError }: Props) {
           payload.credentials = editConn.credentials;
         }
         if (editConn.tls_reject_unauthorized !== undefined) payload.tls_reject_unauthorized = editConn.tls_reject_unauthorized;
-        if (editConn.ca_cert !== undefined) payload.ca_cert = editConn.ca_cert;
+        if (editConn.ca_cert !== undefined) payload.ca_cert = editConn.ca_cert ?? undefined;
         if (editConn.request_timeout_ms !== undefined) payload.request_timeout_ms = editConn.request_timeout_ms;
         if (editConn.max_retries !== undefined) payload.max_retries = editConn.max_retries;
         if (editConn.pool_max_connections !== undefined) payload.pool_max_connections = editConn.pool_max_connections;
         if (editConn.is_default !== undefined) payload.is_default = editConn.is_default;
-        await updateEsConnection(editConn.id, payload as any);
+        await updateEsConnection(editConn.id, payload);
       }
       setEditConn(null);
       await loadConnections();
@@ -169,7 +170,7 @@ export function ElasticsearchSettings({ onAuthError }: Props) {
       } else if (editConn) {
         const result = await testEsConnectionRaw({
           url: editConn.url,
-          auth_type: editConn.auth_type as any,
+          auth_type: editConn.auth_type,
           credentials: editConn.credentials,
           tls_reject_unauthorized: editConn.tls_reject_unauthorized,
           ca_cert: editConn.ca_cert ?? undefined,
@@ -311,7 +312,7 @@ export function ElasticsearchSettings({ onAuthError }: Props) {
               <select
                 className="form-input"
                 value={editConn.auth_type ?? 'none'}
-                onChange={e => setEditConn({ ...editConn, auth_type: e.target.value as any })}
+                onChange={e => setEditConn({ ...editConn, auth_type: e.target.value as EsConnection['auth_type'] })}
               >
                 <option value="none">None</option>
                 <option value="basic">Basic (Username / Password)</option>

@@ -74,6 +74,7 @@ export async function generateComplianceExport(
       window_from: w.from_ts,
       window_to: w.to_ts,
       scores: scoreData,
+      analysis_confidence: typeof meta?.analysis_confidence === 'number' ? meta.analysis_confidence : null,
       summary: meta?.summary ?? '',
       findings,
       recommended_action: meta?.recommended_action ?? null,
@@ -94,6 +95,7 @@ export async function generateComplianceExport(
     'system_name', 'window_from', 'window_to',
     ...CRITERIA.map((c) => `${c.slug}_effective`),
     ...CRITERIA.map((c) => `${c.slug}_severity`),
+    'analysis_confidence',
     'summary', 'findings', 'recommended_action',
   ];
 
@@ -103,6 +105,7 @@ export async function generateComplianceExport(
     csvEscape(r.window_to),
     ...CRITERIA.map((c) => csvEscape(r.scores[c.slug]?.effective?.toFixed(3) ?? '')),
     ...CRITERIA.map((c) => csvEscape(r.scores[c.slug]?.severity ?? '')),
+    csvEscape(typeof r.analysis_confidence === 'number' ? r.analysis_confidence.toFixed(3) : ''),
     csvEscape(r.summary),
     csvEscape(r.findings.join('; ')),
     csvEscape(r.recommended_action ?? ''),

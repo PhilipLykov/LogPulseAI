@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import type { ApiKeyScope, ApiKeyRow } from '../types/index.js';
 import { localTimestamp } from '../config/index.js';
+import { writeBootstrapSecret } from './bootstrapSecrets.js';
 
 /**
  * Hash an API key using SHA-256.
@@ -41,7 +42,8 @@ export async function findApiKeyByHash(db: Knex, plainKey: string): Promise<ApiK
 
 /**
  * Ensure at least one admin key exists. If ADMIN_API_KEY env is set,
- * insert it (idempotent). Otherwise generate one and print it.
+ * insert it (idempotent). Otherwise generate one and persist it into a local
+ * bootstrap file (never printed in logs).
  */
 export async function ensureAdminKey(db: Knex, envKey?: string): Promise<void> {
   const existing = await db('api_keys').where({ scope: 'admin' }).first();
@@ -53,11 +55,18 @@ export async function ensureAdminKey(db: Knex, envKey?: string): Promise<void> {
     await db('api_keys').insert({ id, key_hash: keyHash, scope: 'admin', name: 'env-admin' });
     console.log(`[${localTimestamp()}] Admin API key loaded from environment.`);
   } else {
-    const { plainKey } = await createApiKey(db, 'auto-admin', 'admin');
-    const border = '─'.repeat(plainKey.length + 4);
-    console.log(`[${localTimestamp()}] ┌${border}┐`);
-    console.log(`[${localTimestamp()}] │  AUTO-GENERATED ADMIN API KEY (save it now!):${' '.repeat(Math.max(0, plainKey.length - 44))}  │`);
-    console.log(`[${localTimestamp()}] │  ${plainKey}  │`);
-    console.log(`[${localTimestamp()}] └${border}┘`);
+    const id = uuidv4();
+    const plainKey = generateApiKey();
+    const keyHash = hashApiKey(plainKey);
+    const secretFilePath = await writeBootstrapSecret('BOOTSTRAP ADMIN API KEY', [
+      { key: 'Scope', value: 'admin' },
+      { key: 'Key', value: plainKey },
+    ]);
+
+    await db('api_keys').insert({ id, key_hash: keyHash, scope: 'admin', name: 'auto-admin' });
+
+    console.log(`[${localTimestamp()}] Auto-generated admin API key created.`);
+    console.log(`[${localTimestamp()}] Bootstrap credentials were saved to: ${secretFilePath}`);
+    console.log(`[${localTimestamp()}] IMPORTANT: Use credentials once, then delete the bootstrap file.`);
   }
 }

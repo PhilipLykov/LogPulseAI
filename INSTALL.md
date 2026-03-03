@@ -61,11 +61,16 @@ docker compose --profile db up -d --build
 ```
 
 ```bash
-# 4. Check the backend logs for your admin credentials
-docker compose logs backend | grep -A 5 "BOOTSTRAP"
+# 4. Read one-time bootstrap credentials from backend container
+docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 ```
 
 Open **http://localhost:8070** in your browser and log in with the credentials from step 4.
+After first successful login, delete the bootstrap file for security:
+
+```bash
+docker compose exec backend sh -lc "rm -f /app/bootstrap-secrets.txt"
+```
 
 > **That's it!** The backend and dashboard are running. Continue reading for detailed configuration, LAN/remote access, or advanced topics.
 
@@ -76,7 +81,7 @@ Open **http://localhost:8070** in your browser and log in with the credentials f
 ### First Login
 
 1. Open the dashboard URL in your browser (default: `http://localhost:8070`).
-2. Enter the admin credentials displayed in the backend startup logs.
+2. Enter the admin credentials from `/app/bootstrap-secrets.txt`.
 3. If the password was auto-generated, you will be prompted to set a new password immediately.
    - Requirements: at least **12 characters**, with uppercase, lowercase, digit, and special character.
 4. After login, you will see the main dashboard.
@@ -88,6 +93,8 @@ To avoid the auto-generated password, set these in your `.env` before the first 
 ```bash
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=YourSecurePassword123!
+# Optional, but recommended:
+ADMIN_API_KEY=your-long-random-admin-api-key
 ```
 
 > **Important**: These only take effect on the very first startup (when no users exist in the database). If users already exist, changing these variables has no effect. To reset, see [Troubleshooting > Cannot log in](#cannot-log-in).
@@ -374,7 +381,17 @@ npm start
 On first start, the backend will:
 1. Run all database migrations automatically
 2. Seed the 6 analysis criteria
-3. Create the admin user (credentials printed to console)
+3. Create the admin user (credentials saved to `bootstrap-secrets.txt` in the working directory)
+
+Read the credentials:
+```bash
+cat bootstrap-secrets.txt
+```
+
+After first successful login, delete the file for security:
+```bash
+rm -f bootstrap-secrets.txt
+```
 
 ### Step 5: Build and serve the dashboard
 
@@ -414,7 +431,13 @@ After logging in, go to **Settings > Systems & Sources**.
 1. Click **+ Add** in the left panel.
 2. Enter a name (e.g., `Production Server`) and optional description.
 3. Optionally set a data retention period (e.g., 90 days). Leave empty for the global default.
-4. Click **Save**.
+4. Optionally configure timezone handling:
+   - Fixed UTC offset, or
+   - IANA timezone (DST-aware), or
+   - Save first and then use **Auto-detect timezone** (for non-ES systems) once enough data exists.
+5. Click **Save**.
+
+> **Auto-detect timezone** compares event `timestamp` vs `received_at` drift and proposes settings only when it has enough signal (at least 20 events across at least 3 hours). You can review stats first, then apply with one click.
 
 ### Add a log source
 
@@ -432,10 +455,16 @@ Log sources use regex-based selectors to match incoming events to your system.
 | `{"program": "^nginx"}` | Events from nginx |
 | `{"host": ".*"}` | Everything (catch-all) |
 
-5. Set priority (lower number = evaluated first). Use low priorities for specific rules and higher (e.g., 100) for catch-all rules.
-6. Click **Save**.
+5. Choose an optional **Parse Profile**:
+   - Use a source-specific profile (e.g., `postgresql`, `mysql`, `nginx`, `docker`, `proxmox`, `cron`) for deterministic multiline and field extraction.
+   - Use `common` for safe generic parsing when source format is unknown.
+   - Use `None` to keep fully generic parsing behavior.
+6. Set priority (lower number = evaluated first). Use low priorities for specific rules and higher (e.g., 100) for catch-all rules.
+7. Click **Save**.
 
 > **Tip**: Expand the "How selectors work" section on the settings page for more examples.
+>
+> **Profile behavior transparency**: the source form shows "Under the hood" and "What changes in result" details for each profile, so operators can predict multiline grouping and extracted fields before saving.
 
 ---
 
@@ -460,6 +489,21 @@ curl -X POST http://localhost:3000/api/v1/ingest \
 ```
 
 If configured correctly, the event will appear in the Event Explorer within seconds.
+
+### Optional: External pull connectors
+
+If your logs already live in another platform, configure pull connectors in **Settings > Connectors**.
+
+| Connector type | Minimal required config | Typical use |
+|----------------|-------------------------|-------------|
+| `pull_elasticsearch` | `url`, `index` | Read directly from Elasticsearch/OpenSearch index |
+| `pull_loki` | `url`, `query` | Pull logs from Loki using LogQL |
+| `pull_logtide` | `url` | Pull logs from LogTide API |
+| `pull_victorialogs` | `url` | Pull logs from VictoriaLogs LogsQL API |
+| `pull_rabbitmq` | `url`, `queue` | Consume messages via RabbitMQ Management API |
+| `pull_kafka_rest` | `url`, `topic` | Consume records from Kafka REST Proxy |
+
+For secrets, use `env:VAR_NAME` references in connector config (for example `auth_header_ref`, `username_ref`, `password_ref`) so sensitive values stay in environment variables rather than database rows.
 
 ---
 
@@ -767,6 +811,10 @@ Click **Test** to verify the channel works.
 
 Create silence windows to suppress notifications during maintenance.
 
+### Step 4: Configure scheduled reports (optional)
+
+In **Settings > Notifications > Scheduled Reports**, create recurring report jobs (summary/JSON/CSV), assign channels, and define schedule cadence. You can also run a report immediately with **Run now** for validation.
+
 ---
 
 ## 11. Backup & Maintenance
@@ -854,7 +902,7 @@ psql -h your-pg-host -U syslog_ai -d logsentinel_ai \
 
 # Then restart backend and check logs for new credentials:
 docker compose restart backend
-docker compose logs backend | grep -A 5 "BOOTSTRAP"
+docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 ```
 
 ### Backend fails to start

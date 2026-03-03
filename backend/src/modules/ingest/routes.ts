@@ -6,8 +6,10 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress, applyTimezoneOffset, applyTimezoneByName, clampFutureTimestamp } from './normalize.js';
 import { redactEvent } from './redact.js';
-import { matchSource } from './sourceMatch.js';
+import { matchSource, getSourceHints } from './sourceMatch.js';
 import { reassembleMultilineEntries } from './multiline.js';
+import type { MultilineSourceHint } from './multiline.js';
+import { applyProfileExtraction, getParseProfile } from './parseProfiles.js';
 import type { IngestEntry, IngestResponse } from '../../types/index.js';
 
 const MAX_BATCH_SIZE = 1000;
@@ -43,6 +45,26 @@ function extractEntries(body: unknown): unknown[] | null {
   }
 
   return null;
+}
+
+/**
+ * Align message field aliases for multiline preprocessing.
+ * Ingest accepts `msg` / `short_message` / `body`, while multiline logic
+ * expects `message`. We normalize aliases early so profile/multiline behavior
+ * is consistent with normalizeEntry().
+ */
+function normalizeMessageFieldForMultiline(entry: unknown): unknown {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+  const obj = entry as Record<string, unknown>;
+  if (typeof obj.message === 'string') return entry;
+
+  const alias =
+    (typeof obj.msg === 'string' ? obj.msg : undefined) ??
+    (typeof obj.short_message === 'string' ? obj.short_message : undefined) ??
+    (typeof obj.body === 'string' ? obj.body : undefined);
+
+  if (!alias) return entry;
+  return { ...obj, message: alias };
 }
 
 /**
@@ -87,11 +109,17 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
       // ── Multiline reassembly (e.g. PostgreSQL continuation lines) ──
       // Merges related multi-line log entries into a single event before
       // normalisation.  Controlled by pipeline_config.multiline_reassembly.
-      let entries = rawEntries;
+      let entries = rawEntries.map((entry) => normalizeMessageFieldForMultiline(entry));
       const multilineEnabled = pipelineCfg.multiline_reassembly !== false; // default: enabled
       if (multilineEnabled) {
+        let sourceHints: MultilineSourceHint[] = [];
+        try {
+          sourceHints = await getSourceHints(db);
+        } catch {
+          // Non-critical — fallback to generic multiline behavior.
+        }
         const before = entries.length;
-        entries = reassembleMultilineEntries(entries);
+        entries = reassembleMultilineEntries(entries, sourceHints);
         if (entries.length < before) {
           app.log.debug(
             `[${localTimestamp()}] Multiline reassembly: ${before} → ${entries.length} entries (merged ${before - entries.length})`,
@@ -247,14 +275,26 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           });
         }
 
-        // 2b. Apply per-system timezone correction (corrects RFC 3164 TZ mismatch)
-        const tzName = tzNameMap.get(match.system_id);
-        if (tzName) {
-          normalized.timestamp = applyTimezoneByName(normalized.timestamp, tzName);
-        } else {
-          const tzOffset = tzOffsetMap.get(match.system_id);
-          if (tzOffset) {
-            normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+        // 2b. Apply parse-profile extraction after source match.
+        if (match.parse_profile) {
+          const profile = getParseProfile(match.parse_profile);
+          if (profile) {
+            applyProfileExtraction(normalized, profile);
+          }
+        }
+
+        // 2b. Apply per-system timezone correction (corrects RFC 3164 TZ mismatch).
+        // Skip if the raw timestamp already contained timezone info (Z, +HH:MM, epoch)
+        // because new Date() already converted it to correct UTC.
+        if (!normalized._timestampHadTzInfo) {
+          const tzName = tzNameMap.get(match.system_id);
+          if (tzName) {
+            normalized.timestamp = applyTimezoneByName(normalized.timestamp, tzName);
+          } else {
+            const tzOffset = tzOffsetMap.get(match.system_id);
+            if (tzOffset) {
+              normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+            }
           }
         }
 

@@ -66,7 +66,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
       // Validate URL in config if present (A10)
       try {
-        if (config.url) validateUrl(config.url);
+        validateConnectorConfig(type, config);
       } catch (urlErr: any) {
         return reply.code(400).send({ error: urlErr.message ?? 'Invalid URL' });
       }
@@ -112,12 +112,17 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
       if (name !== undefined) updates.name = name;
       if (config !== undefined) {
+        const existingConfig = parseConfig(existing).config;
+        const mergedConfig = {
+          ...(existingConfig && typeof existingConfig === 'object' ? existingConfig : {}),
+          ...(config && typeof config === 'object' ? config : {}),
+        };
         try {
-          if (config.url) validateUrl(config.url);
+          validateConnectorConfig(existing.type, mergedConfig);
         } catch (urlErr: any) {
           return reply.code(400).send({ error: urlErr.message ?? 'Invalid URL' });
         }
-        updates.config = JSON.stringify(config);
+        updates.config = JSON.stringify(mergedConfig);
       }
       if (enabled !== undefined) updates.enabled = enabled;
       if (poll_interval_seconds !== undefined) {
@@ -180,4 +185,57 @@ function parseConfig(row: any): any {
     try { config = JSON.parse(config); } catch { /* keep as string */ }
   }
   return { ...row, config };
+}
+
+function validateConnectorConfig(type: string, config: unknown): void {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('config must be a JSON object');
+  }
+
+  const cfg = config as Record<string, unknown>;
+  const url = asNonEmptyString(cfg.url);
+  if (url) validateUrl(url);
+
+  switch (type) {
+    case 'pull_elasticsearch':
+      requireField(cfg, 'url');
+      requireField(cfg, 'index');
+      break;
+    case 'pull_loki':
+      requireField(cfg, 'url');
+      requireField(cfg, 'query');
+      break;
+    case 'pull_logtide':
+      requireField(cfg, 'url');
+      break;
+    case 'pull_victorialogs':
+      requireField(cfg, 'url');
+      break;
+    case 'pull_rabbitmq':
+      requireField(cfg, 'url');
+      requireField(cfg, 'queue');
+      break;
+    case 'pull_kafka_rest':
+      requireField(cfg, 'url');
+      requireField(cfg, 'topic');
+      break;
+    case 'webhook':
+    case 'syslog':
+      // Future push connectors; no strict schema here.
+      break;
+    default:
+      // Unknown types are blocked at type validation layer.
+      break;
+  }
+}
+
+function requireField(cfg: Record<string, unknown>, key: string): void {
+  const value = asNonEmptyString(cfg[key]);
+  if (!value) {
+    throw new Error(`config.${key} is required`);
+  }
+}
+
+function asNonEmptyString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
 }

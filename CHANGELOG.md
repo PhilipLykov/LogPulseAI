@@ -5,18 +5,79 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0-beta] - 2026-03-03
+
+### Added
+- **Per-Source Parse Profile System (Phase 1 + Phase 2)**: Log sources now support optional `parse_profile` selection. Added profile registry and extraction engine in `backend/src/modules/ingest/parseProfiles.ts` with profile-aware multiline behavior and field extraction into `event.raw`
+- **Profile Catalog API**: New `GET /api/v1/parse-profiles` endpoint returns available profiles, categories, multiline modes, extracted fields, and user-facing behavior descriptions
+- **New Parse Profiles**: Added profile packs for `docker`, `proxmox`, `cron`, and `common` (safe generic), in addition to the initial profile set for PostgreSQL, MySQL/MariaDB, Apache, nginx, Cisco, MikroTik, ProCurve, Asterisk, systemd, OpenSSH, iptables, postfix, and HAProxy
+- **Source Form Profile UX**: `SourceForm` now includes a parse profile selector grouped by category, plus "Under the hood" and "What changes in result" explanations to make parser behavior predictable for operators
+- **Schema Support**: Added migration `034_log_source_parse_profile` introducing nullable `log_sources.parse_profile`
+
+### Changed
+- **Multiline Engine is Profile-Aware**: `reassembleMultilineEntries` now accepts source hints and applies per-profile modes (`none`, `indent_only`, `timestamp_head`) before falling back to conservative generic logic
+- **Generic Multiline Tightening**: Removed aggressive generic fragment heuristics to reduce accidental event joins; generic mode now focuses on indentation and stack-trace style continuations
+- **Strict Timestamp-Head Grouping**: In `timestamp_head` mode, non-head lines are treated as continuations for deterministic grouping in known formats
+- **Ingest Alias Normalization Before Multiline**: `msg`, `short_message`, and `body` are normalized to `message` before multiline/profile preprocessing to keep behavior consistent with `normalizeEntry`
+- **Connector Dedup Consistency**: Pull connector runner now uses conflict-ignore dedup semantics on (`normalized_hash`, `timestamp`) to prevent duplicate-insert failure loops
+- **Download Auth Header Consistency**: Dashboard backup download now uses auth headers compatible with session-token flows (`Authorization: Bearer ...`) with legacy API-key fallback
+
+### Security
+- **Selector Validation Hardening**: Source selector create/update validation now enforces non-empty string regex patterns, compilation checks, and size limits (groups/rules/pattern length) to prevent malformed selectors and reduce regex abuse risk
+
+### Fixed
+- **False Split/Merge Edge Cases**: Profile + cross-batch buffering paths now honor profile-specific fragment classification and no-buffer rules, including single-entry batches
+- **Source List Race Condition**: Fixed stale async overwrite in `SettingsView` when switching systems quickly (request versioning guard)
+- **Source Ordering Drift**: Source table now remains sorted by priority after create/update without requiring manual reload
+- **Permission UX Consistency**: System/source create/edit/delete actions are now hidden for view-only users (`systems:view` without `systems:manage`) to avoid dead-end 403 flows
+- **Selector AND-Group Integrity**: Source form now blocks duplicate field keys within the same AND group to prevent silent overwrite of conditions during serialization
+
 ## [0.8.10-beta] - 2026-02-27
 
 ### Added
+- **MITRE ATT&CK Mapping & Confidence Scores (P2.2)**: LLM meta-analysis now returns optional `analysis_confidence` (0-1) per window and `confidence` + `mitre_techniques` (e.g., `["T1190","T1059.003"]`) per finding. New DB columns via migration `033_mitre_confidence`, backend parsing with `sanitizeMitreTechniques`, and frontend display in DrillDown (confidence percentages, MITRE technique badges with +N more overflow)
+- **Scheduled Reports (P2.1)**: Recurring summary/JSON/CSV compliance reports routed through existing notification channels. Backend scheduler with cron-like scheduling, CRUD API (`/api/v1/scheduled-reports`), run-now endpoint, and a full management UI in **Settings > Notifications > Scheduled Reports** with preset/custom schedule and lookback options
+- **New Connector Families (P2.3)**: Three new pull connector types — `pull_victorialogs` (VictoriaLogs LogsQL API), `pull_rabbitmq` (RabbitMQ Management HTTP API), `pull_kafka_rest` (Confluent-compatible Kafka REST Proxy v2). Each connector includes SSRF-safe URL validation, `env:` secret references, event normalization, and cursor management
+- **Async Recalculation Queue (P1.1)**: `recalcEffectiveScores` is now dispatched via a coalescing queue (`recalcQueue.ts`) instead of running synchronously in API handlers. Prevents database contention under load while ensuring all changes are reflected. API responses include `recalc_status: 'queued'`
+- **Hot-Path Database Indexes (P1.3)**: Migration `032_hot_path_indexes` adds optimized indexes on `meta_results(created_at)`, `events(LOWER(severity))`, `events(timestamp WHERE acknowledged_at IS NOT NULL)`, and `effective_scores(system_id, criterion_id, effective_value, window_id)` for dashboard and pipeline hot paths
+- **Secure Bootstrap Credentials (P0.2)**: Admin password and auto-generated API keys are no longer printed to `stdout`. A new `bootstrapSecrets.ts` module writes them to `/app/bootstrap-secrets.txt` with restricted file permissions (mode `0o600`), eliminating the TOCTOU window
 - **Application-Level Multiline Merging for Docker Logs**: New Fluent Bit `MULTILINE_PARSER` (`docker_app_multiline`) detects new log entries by their prefix pattern (bracketed tags, uppercase levels, timestamps, JSON objects) and treats everything else as continuation lines. A `multiline` filter in the pipeline merges continuations into the preceding record's message field before Lua enrichment runs. This prevents applications that format output across multiple lines (arrays, stack traces, objects) from producing fragmented events in the backend
 - **Universal Fragment Detection in Backend Multiline Module**: Expanded the `isFragment()` heuristic in `multiline.ts` Method 3 (generic fragment detection) with new patterns for quoted data-structure elements (`'paxcounter' ]`, `"enabled": true,`), quoted key-value pairs (`"key": value`), short lines ending with trailing commas, and list/diff/separator prefixes (`# - + ~ | *`). This catches continuation fragments even when Fluent Bit's Lua cleanup has stripped leading whitespace
 - **Discovery Suggestion Suppression**: The auto-discovery grouping engine now identifies and skips groups that are already covered by specific (non-catch-all) existing log sources. Stale pending/dismissed suggestions and buffer entries for covered sources are automatically cleaned up, preventing regeneration
 
 ### Changed
+- **Search Scalability Safeguards (P1.2)**: Backend wildcard/ILIKE searches now enforce a minimum query length and auto-apply a time range lookback when no date filter is specified, preventing expensive full-table scans. Frontend `EventExplorerView` uses request-cancellation (`useRef`-based request IDs) to discard stale search results
+- **UI Consistency Improvements (P1.4)**: Migrated from native `window.confirm` to a custom `ConfirmDialog` component for API key revocation. Centralized date formatting via `utils/dateTime.ts`. Unified error handling through `handleApiError` callbacks. Extracted `hasPermission` to `utils/permissions.ts` for React fast-refresh compatibility
+- **Compliance Export Enrichment**: CSV and JSON compliance exports now include `analysis_confidence` per window
+- **DEFAULT_W_META Deduplicated**: The meta-analysis weight constant is now imported from `recalcScores.ts` in all consumers instead of being duplicated across files
 - **Discovery Panel Redesign**: Replaced the cramped table layout with a card-based design for discovered sources. Each card shows an editable name, event count badge, host/IP/program metadata tags, date range, sample messages, and action buttons in a visually organized layout
 - **Discovery Date Format**: Standardized date display to DD-MM-YYYY HH:MM:SS format using a dedicated `formatEuDate` helper, replacing inconsistent `toLocaleString()` calls
 
+### Security
+- **Kafka REST Proxy SSRF Prevention**: The `base_uri` returned by the Kafka REST Proxy after consumer creation is now validated through `validateUrl()` before use, preventing a compromised proxy from redirecting requests to internal services
+- **Elasticsearch Wildcard Escape**: User input in ES wildcard searches is now escaped (`*`, `?`, `\`) before interpolation, preventing query-level DoS via expensive patterns
+- **Bootstrap Admin `must_change_password` Fix**: When `ADMIN_PASSWORD` is set but too short (< 12 chars), the auto-generated fallback password now correctly forces a password change on first login
+- **Login Form Autocomplete**: Added `name` and `autocomplete` attributes to login and change-password form fields so browsers correctly offer to save/update credentials
+
 ### Fixed
+- **VictoriaLogs Cursor Stall**: When all fetched events shared the exact same timestamp as the current cursor, `newestTs` never advanced, causing infinite duplicate fetches. Cursor now advances to `toIso` when no progress is detected
+- **Kafka REST Proxy Accept Header**: The records fetch endpoint used `Content-Type` instead of `Accept` and always sent `application/vnd.kafka.v2+json`. Now derives the correct `Accept` header (`application/vnd.kafka.json.v2+json` or `binary`) from the configured format
+- **Kafka REST Proxy Offset Commit**: The offset commit body was always empty `{}`, causing most brokers to reject with 422. Now sends the actual offsets array. Commit is also skipped when there are no offsets to avoid unnecessary requests
+- **Kafka Numeric Timestamp Loss**: Kafka record timestamps (epoch milliseconds as numbers) were silently discarded by `asNonEmptyString`. New `asTimestampInput` helper handles both string and numeric timestamps
+- **RabbitMQ Non-Array Response Guard**: If the Management API returned a non-array body (e.g., `{"error":"not_found"}`), the connector crashed with `TypeError: rows is not iterable`. Now returns empty events on unexpected response shapes
+- **SystemForm Elasticsearch Config Preservation**: Saving a system form silently dropped `query_filter`, `field_mapping`, and other API-set `esConfig` fields. Now spreads `initialEsConfig` before overriding only the three displayed fields
+- **Meta-Analysis O1 Path Atomicity**: The zero-score optimization path wrote `meta_results` and incremented `findings.consecutive_misses` as two separate non-transactional calls. Now wrapped in `db.transaction()`
+- **Scheduled Report Scheduler Crash**: The `setInterval` callback in `startScheduledReportScheduler` lacked a `catch` block. A DB failure during initialization queries caused an unhandled promise rejection that could crash the Node.js process
+- **Scheduled Report Error History**: The failure-history `export_jobs` insert inside the per-report `catch` block was unguarded. If the DB was unavailable, it would abort the entire scheduler tick. Now wrapped in its own `try/catch`
+- **Re-evaluate "No Events" Response**: The backend omitted the `status` field in the 200 response when no events were found, but the frontend `ReEvaluateResponse` interface required it. Added `status: 'done'`
+- **Elasticsearch Unacknowledge 10k Truncation**: `unacknowledgeEvents` used a hardcoded `size: 10000` single query. Now uses the same `search_after` pagination as `acknowledgeEvents`, handling arbitrarily large result sets
+- **Meta-Analysis key_event_ids Backfill**: The backfill resolved `[N]` event references using the current window's mapping, linking old findings to wrong events. Now scoped to findings from the current meta result only
+- **Event Explorer Highlight Logic**: Both branches of the `searchMode` ternary returned `query.trim()`, making the condition dead code. Now correctly suppresses highlighting in fulltext mode where stemming makes literal matching unreliable
+- **React State Updater Side Effect**: `loadSystems` called `setLoading(true)` inside a `setSystems` updater function, violating React's purity contract. Replaced with a ref-based pattern
+- **MITRE Regex Redundant Flag**: Removed the `i` flag from `MITRE_TECHNIQUE_RE` since input is already `.toUpperCase()`
+- **MITRE Techniques Truncation Indicator**: `.slice(0, 8)` silently dropped extra techniques. Now shows a "+N more" badge with tooltip
+- **Frontend API Type Cleanup**: Removed phantom `updated_windows` and `transitioned_findings` fields from `AckEventsResponse`, `unacknowledgeEvents`, and `unacknowledgeEventGroup`. Added `key_event_ids` and `created_at` to `MetaResult`. Added `template_title`/`template_body` to notification rule create/update request types
+- **RabbitMQ No-Op Ternary**: Both branches of `events.length > 0 ? nowIso : nowIso` returned the same value. Simplified to `nowIso`
 - **Ack All Events/Findings Not Refreshing Scores**: The "Ack All Events" button now refreshes criterion groups, meta-analysis summary, findings list, and parent system scores after completion. "Ack All Findings" now refreshes parent system scores. Both now behave consistently with per-group acknowledgment
 - **Discovery Engine Suggesting Already-Covered Sources**: The grouping engine was creating suggestions for hosts/IPs already matched by specific log sources, and old buffer entries kept regenerating stale suggestions after dismissal
 - **Score Bars Not Updating After Ack/Unack Operations**: All four event acknowledgment/unacknowledgment backend endpoints now run `recalcEffectiveScores` synchronously before sending the HTTP response, eliminating the race condition where the frontend fetched stale scores

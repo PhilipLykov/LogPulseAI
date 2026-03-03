@@ -20,6 +20,23 @@ interface PrivacySectionProps {
   onAuthError: () => void;
 }
 
+type ToggleField =
+  | 'llm_filter_enabled'
+  | 'filter_ipv4'
+  | 'filter_ipv6'
+  | 'filter_email'
+  | 'filter_phone'
+  | 'filter_urls'
+  | 'filter_user_paths'
+  | 'filter_mac_addresses'
+  | 'filter_credit_cards'
+  | 'filter_passwords'
+  | 'filter_api_keys'
+  | 'filter_usernames'
+  | 'strip_host_field'
+  | 'strip_program_field'
+  | 'log_llm_requests';
+
 /** Format date for EU display */
 function toEuInput(d: Date): string {
   const dd = String(d.getDate()).padStart(2, '0');
@@ -41,7 +58,7 @@ function parseEuToIso(s: string): string | null {
 }
 
 const FILTER_CATEGORIES: Array<{
-  key: keyof PrivacyFilterConfig;
+  key: ToggleField;
   label: string;
   description: string;
   example: string;
@@ -137,9 +154,9 @@ export function PrivacySection({ onAuthError }: PrivacySectionProps) {
 
   // ── Handlers ──────────────────────────────────────────────
 
-  const handleToggle = (key: keyof PrivacyFilterConfig) => {
+  const handleToggle = (key: ToggleField) => {
     if (!cfg) return;
-    setCfg({ ...cfg, [key]: !(cfg as any)[key] });
+    setCfg({ ...cfg, [key]: !cfg[key] });
   };
 
   const handleSave = async () => {
@@ -315,7 +332,7 @@ export function PrivacySection({ onAuthError }: PrivacySectionProps) {
           PII Filter Categories
           {cfg.llm_filter_enabled && (
             <span className="prompt-custom-badge">
-              {FILTER_CATEGORIES.filter((c) => (cfg as any)[c.key]).length} / {FILTER_CATEGORIES.length} active
+              {FILTER_CATEGORIES.filter((c) => cfg[c.key]).length} / {FILTER_CATEGORIES.length} active
             </span>
           )}
         </button>
@@ -326,7 +343,7 @@ export function PrivacySection({ onAuthError }: PrivacySectionProps) {
               <label key={cat.key} className="privacy-filter-item" title={cat.example}>
                 <input
                   type="checkbox"
-                  checked={(cfg as any)[cat.key] as boolean}
+                  checked={cfg[cat.key]}
                   onChange={() => handleToggle(cat.key)}
                   disabled={!cfg.llm_filter_enabled}
                 />

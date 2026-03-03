@@ -6,6 +6,11 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
+import {
+  computeNextRunAt,
+  isSupportedSchedule,
+  runScheduledReportNow,
+} from './scheduledReports.js';
 
 /**
  * Alerting API: CRUD for channels, rules, silences; alert history; test notification.
@@ -289,6 +294,212 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       });
 
       return reply.code(204).send();
+    },
+  );
+
+  // ═══ SCHEDULED REPORTS ═════════════════════════════════════
+
+  app.get(
+    '/api/v1/scheduled-reports',
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_VIEW) },
+    async (_req, reply) => {
+      const rows = await db('scheduled_reports as sr')
+        .leftJoin('notification_channels as ch', 'sr.channel_id', 'ch.id')
+        .select('sr.*', db.raw('ch.name as channel_name'))
+        .orderBy('sr.created_at', 'desc');
+      return reply.send(rows.map(parseJsonFields));
+    },
+  );
+
+  app.post(
+    '/api/v1/scheduled-reports',
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
+    async (request, reply) => {
+      const body = request.body as any;
+      const { name, channel_id, schedule, report_type, filters, enabled } = body ?? {};
+
+      if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        return reply.code(400).send({ error: '"name" is required.' });
+      }
+      if (!schedule || typeof schedule !== 'string' || !isSupportedSchedule(schedule)) {
+        return reply.code(400).send({
+          error: '"schedule" is required and must be one of supported cron forms (e.g. */15 * * * *, 0 * * * *, 0 0 * * *).',
+        });
+      }
+      const validReportTypes = ['summary', 'json', 'csv'];
+      const reportType = report_type ?? 'summary';
+      if (!validReportTypes.includes(reportType)) {
+        return reply.code(400).send({ error: `report_type must be one of: ${validReportTypes.join(', ')}` });
+      }
+      if (channel_id) {
+        const channel = await db('notification_channels').where({ id: channel_id }).first();
+        if (!channel) return reply.code(400).send({ error: 'Channel not found.' });
+      }
+
+      const id = uuidv4();
+      const nextRunAt = computeNextRunAt(schedule, new Date()).toISOString();
+
+      await db('scheduled_reports').insert({
+        id,
+        name: name.trim(),
+        channel_id: channel_id ?? null,
+        schedule,
+        report_type: reportType,
+        filters: filters ? JSON.stringify(filters) : null,
+        next_run_at: nextRunAt,
+        enabled: enabled ?? true,
+      });
+
+      await writeAuditLog(db, {
+        actor_name: getActorName(request),
+        action: 'scheduled_report_create',
+        resource_type: 'scheduled_report',
+        resource_id: id,
+        details: { report_type: reportType, schedule, channel_id: channel_id ?? null },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
+      const created = await db('scheduled_reports').where({ id }).first();
+      return reply.code(201).send(parseJsonFields(created));
+    },
+  );
+
+  app.put<{ Params: { id: string } }>(
+    '/api/v1/scheduled-reports/:id',
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
+    async (request, reply) => {
+      const { id } = request.params;
+      const existing = await db('scheduled_reports').where({ id }).first();
+      if (!existing) return reply.code(404).send({ error: 'Scheduled report not found.' });
+
+      const body = request.body as any;
+      const updates: Record<string, any> = {};
+
+      if (body.name !== undefined) {
+        if (typeof body.name !== 'string' || body.name.trim().length === 0) {
+          return reply.code(400).send({ error: '"name" must be a non-empty string.' });
+        }
+        updates.name = body.name.trim();
+      }
+
+      if (body.channel_id !== undefined) {
+        if (body.channel_id) {
+          const channel = await db('notification_channels').where({ id: body.channel_id }).first();
+          if (!channel) return reply.code(400).send({ error: 'Channel not found.' });
+        }
+        updates.channel_id = body.channel_id ?? null;
+      }
+
+      if (body.schedule !== undefined) {
+        if (typeof body.schedule !== 'string' || !isSupportedSchedule(body.schedule)) {
+          return reply.code(400).send({
+            error: '"schedule" must be one of supported cron forms (e.g. */15 * * * *, 0 * * * *, 0 0 * * *).',
+          });
+        }
+        updates.schedule = body.schedule;
+        updates.next_run_at = computeNextRunAt(body.schedule, new Date()).toISOString();
+      }
+
+      if (body.report_type !== undefined) {
+        const validReportTypes = ['summary', 'json', 'csv'];
+        if (!validReportTypes.includes(body.report_type)) {
+          return reply.code(400).send({ error: `report_type must be one of: ${validReportTypes.join(', ')}` });
+        }
+        updates.report_type = body.report_type;
+      }
+
+      if (body.filters !== undefined) {
+        updates.filters = body.filters ? JSON.stringify(body.filters) : null;
+      }
+
+      if (body.enabled !== undefined) {
+        updates.enabled = Boolean(body.enabled);
+        if (updates.enabled === true && !updates.next_run_at) {
+          const schedule = (updates.schedule ?? existing.schedule) as string;
+          updates.next_run_at = computeNextRunAt(schedule, new Date()).toISOString();
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return reply.code(400).send({ error: 'No updatable fields provided.' });
+      }
+
+      await db('scheduled_reports').where({ id }).update(updates);
+
+      await writeAuditLog(db, {
+        actor_name: getActorName(request),
+        action: 'scheduled_report_update',
+        resource_type: 'scheduled_report',
+        resource_id: id,
+        details: { ...updates },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
+      const updated = await db('scheduled_reports').where({ id }).first();
+      return reply.send(parseJsonFields(updated));
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/v1/scheduled-reports/:id',
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
+    async (request, reply) => {
+      const { id } = request.params;
+      const existing = await db('scheduled_reports').where({ id }).first();
+      if (!existing) return reply.code(404).send({ error: 'Scheduled report not found.' });
+
+      await db('scheduled_reports').where({ id }).del();
+
+      await writeAuditLog(db, {
+        actor_name: getActorName(request),
+        action: 'scheduled_report_delete',
+        resource_type: 'scheduled_report',
+        resource_id: id,
+        details: { name: existing.name, schedule: existing.schedule },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
+      return reply.code(204).send();
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/scheduled-reports/:id/run-now',
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
+    async (request, reply) => {
+      const { id } = request.params;
+      const existing = await db('scheduled_reports').where({ id }).first();
+      if (!existing) return reply.code(404).send({ error: 'Scheduled report not found.' });
+
+      try {
+        await runScheduledReportNow(db, id);
+      } catch (err: any) {
+        return reply.code(500).send({ error: err?.message ?? 'Failed to execute scheduled report.' });
+      }
+
+      await writeAuditLog(db, {
+        actor_name: getActorName(request),
+        action: 'scheduled_report_run_now',
+        resource_type: 'scheduled_report',
+        resource_id: id,
+        details: { name: existing.name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
+      const updated = await db('scheduled_reports').where({ id }).first();
+      return reply.send({
+        ok: true,
+        message: 'Scheduled report executed.',
+        report: parseJsonFields(updated),
+      });
     },
   );
 

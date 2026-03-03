@@ -87,21 +87,25 @@ export function LoginForm({ onLogin }: LoginFormProps) {
           <label htmlFor="new-pw-input" className="sr-only">New Password</label>
           <input
             id="new-pw-input"
+            name="new-password"
             type="password"
             placeholder="New Password (min 12 chars)"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             autoFocus
+            autoComplete="new-password"
             minLength={12}
           />
 
           <label htmlFor="confirm-pw-input" className="sr-only">Confirm Password</label>
           <input
             id="confirm-pw-input"
+            name="confirm-password"
             type="password"
             placeholder="Confirm New Password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="new-password"
             minLength={12}
           />
 
@@ -130,6 +134,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
         <label htmlFor="username-input" className="sr-only">Username</label>
         <input
           id="username-input"
+          name="username"
           type="text"
           placeholder="Username"
           value={username}
@@ -142,6 +147,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
         <label htmlFor="password-input" className="sr-only">Password</label>
         <input
           id="password-input"
+          name="password"
           type="password"
           placeholder="Password"
           value={password}

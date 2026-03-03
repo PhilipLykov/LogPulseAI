@@ -18,17 +18,10 @@ import { SettingsView } from './components/SettingsView';
 import { LlmUsageView } from './components/LlmUsageView';
 import { EventExplorerView } from './components/EventExplorerView';
 import { AskAiPanel } from './components/AskAiPanel';
+import { hasPermission } from './utils/permissions';
 import './index.css';
 
 type View = 'dashboard' | 'settings' | 'ai-usage' | 'events';
-
-/** Check if user has a specific permission. */
-export function hasPermission(user: CurrentUser | null, perm: string): boolean {
-  if (!user) return false;
-  // Administrators get everything
-  if (user.role === 'administrator') return true;
-  return user.permissions?.includes(perm) ?? false;
-}
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(!!getStoredApiKey());
@@ -63,12 +56,22 @@ export default function App() {
     }
   }, [authenticated, currentUser]);
 
+  const handleLogout = useCallback(async () => {
+    await apiLogout();
+    setAuthenticated(false);
+    setCurrentUser(null);
+    setSystems([]);
+    setSelectedSystem(null);
+    setLastRefreshed(null);
+    setView('dashboard');
+  }, []);
+
+  const systemsRef = useRef<DashboardSystem[]>([]);
+  systemsRef.current = systems;
+
   const loadSystems = useCallback(async (isManual = false) => {
     const id = ++fetchId.current;
-    setSystems((prev) => {
-      if (prev.length === 0) setLoading(true);
-      return prev;
-    });
+    if (systemsRef.current.length === 0) setLoading(true);
     if (isManual) {
       setRefreshing(true);
     }
@@ -101,7 +104,7 @@ export default function App() {
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [handleLogout]);
 
   useEffect(() => {
     if (authenticated) {
@@ -115,16 +118,6 @@ export default function App() {
     setCurrentUser(user);
     setAuthenticated(true);
   };
-
-  const handleLogout = useCallback(async () => {
-    await apiLogout();
-    setAuthenticated(false);
-    setCurrentUser(null);
-    setSystems([]);
-    setSelectedSystem(null);
-    setLastRefreshed(null);
-    setView('dashboard');
-  }, []);
 
   if (!authenticated) {
     return <LoginForm onLogin={handleLogin} />;

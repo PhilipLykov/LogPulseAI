@@ -9,7 +9,8 @@ import {
 } from '../api';
 import { TracePanel } from './TracePanel';
 import { MultiSelect } from './MultiSelect';
-import { EuDateInput, euToIso } from './EuDateInput';
+import { EuDateInput } from './EuDateInput';
+import { euToIso } from '../utils/dateTime';
 
 interface Props {
   onAuthError: () => void;
@@ -148,6 +149,7 @@ export function EventExplorerView({ onAuthError }: Props) {
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initialLoadDone = useRef(false);
+  const latestSearchReqId = useRef(0);
 
   /** The current search term for highlighting (kept in sync after search completes). */
   const [activeHighlight, setActiveHighlight] = useState('');
@@ -168,6 +170,7 @@ export function EventExplorerView({ onAuthError }: Props) {
 
   const doSearch = useCallback(
     async (pageOverride?: number) => {
+      const reqId = ++latestSearchReqId.current;
       setLoading(true);
       setError('');
       setExpandedRow(null);
@@ -195,12 +198,14 @@ export function EventExplorerView({ onAuthError }: Props) {
 
       try {
         const data = await searchEvents(params);
+        if (reqId !== latestSearchReqId.current) return;
         setResult(data);
         setPage(targetPage);
         setHasSearched(true);
         // Update highlight term based on "contains" mode (full-text tokenizes differently)
-        setActiveHighlight(searchMode === 'contains' && query.trim() ? query.trim() : query.trim());
+        setActiveHighlight(searchMode === 'contains' ? query.trim() : '');
       } catch (err: unknown) {
+        if (reqId !== latestSearchReqId.current) return;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('Authentication')) {
           onAuthError();
@@ -208,7 +213,9 @@ export function EventExplorerView({ onAuthError }: Props) {
           setError(msg);
         }
       } finally {
-        setLoading(false);
+        if (reqId === latestSearchReqId.current) {
+          setLoading(false);
+        }
       }
     },
     [query, searchMode, systemFilter, severityFilter, hostFilter, sourceIpFilter, programFilter, fromDate, toDate, sortBy, sortDir, page, onAuthError],

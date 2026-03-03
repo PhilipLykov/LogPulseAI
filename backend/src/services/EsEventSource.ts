@@ -33,6 +33,8 @@ import type { EsSystemConfig } from '../types/index.js';
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 100;
 const FACET_LIMIT = 200;
+const MIN_CONTAINS_QUERY_LEN = 3;
+const CONTAINS_DEFAULT_LOOKBACK_DAYS = 30;
 
 const ALLOWED_SORT_COLUMNS = new Set([
   'timestamp', 'severity', 'host', 'source_ip', 'program', 'service',
@@ -155,6 +157,8 @@ export class EsEventSource implements EventSource {
     const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
     const rawLimit = filters.limit ?? DEFAULT_LIMIT;
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), MAX_LIMIT) : DEFAULT_LIMIT;
+    const parsedFrom = filters.from && !isNaN(Date.parse(filters.from)) ? filters.from : undefined;
+    const parsedTo = filters.to && !isNaN(Date.parse(filters.to)) ? filters.to : undefined;
 
     // Build query
     const must: any[] = [];
@@ -192,10 +196,10 @@ export class EsEventSource implements EventSource {
     // (EsEventSource is always scoped to one system, so system_id filter is implicit)
 
     // Time range
-    if (filters.from || filters.to) {
+    if (parsedFrom || parsedTo) {
       const range: Record<string, string> = {};
-      if (filters.from && !isNaN(Date.parse(filters.from))) range.gte = filters.from;
-      if (filters.to && !isNaN(Date.parse(filters.to))) range.lte = filters.to;
+      if (parsedFrom) range.gte = parsedFrom;
+      if (parsedTo) range.lte = parsedTo;
       if (Object.keys(range).length > 0) {
         filter.push({ range: { [this.esField('timestamp')]: range } });
       }
@@ -203,11 +207,32 @@ export class EsEventSource implements EventSource {
 
     // Full-text search
     if (filters.q && filters.q.trim().length > 0) {
+      const trimmed = filters.q.trim();
       const msgField = this.esField('message');
       if (filters.q_mode === 'contains') {
-        must.push({ wildcard: { [msgField]: { value: `*${filters.q.trim()}*`, case_insensitive: true } } });
+        // Guardrail for expensive wildcard scans.
+        if (trimmed.length < MIN_CONTAINS_QUERY_LEN) {
+          return {
+            events: [],
+            total: 0,
+            page,
+            limit,
+            has_more: false,
+          };
+        }
+
+        // Keep unbounded contains scans from touching very old indices.
+        if (!parsedFrom && !parsedTo) {
+          const lookbackFrom = new Date(
+            Date.now() - CONTAINS_DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+          ).toISOString();
+          filter.push({ range: { [this.esField('timestamp')]: { gte: lookbackFrom } } });
+        }
+
+        const escaped = trimmed.replace(/[*?\\]/g, '\\$&');
+        must.push({ wildcard: { [msgField]: { value: `*${escaped}*`, case_insensitive: true } } });
       } else {
-        must.push({ match: { [msgField]: { query: filters.q.trim(), operator: 'and' } } });
+        must.push({ match: { [msgField]: { query: trimmed, operator: 'and' } } });
       }
     }
 
@@ -613,8 +638,6 @@ export class EsEventSource implements EventSource {
   }
 
   async unacknowledgeEvents(filters: AckFilters): Promise<number> {
-    // Match the time range by querying ES for the matching IDs first,
-    // then clear ack + scored_at in PG's es_event_metadata and delete event_scores.
     const client = await this.getClient();
     const base = this.baseQuery();
     const esFilter: any[] = [];
@@ -626,36 +649,45 @@ export class EsEventSource implements EventSource {
     range.lte = filters.to;
     esFilter.push({ range: { [tsField]: range } });
 
-    // Get IDs from ES
-    const result = await client.search({
-      index: base.index,
-      query: { bool: { filter: esFilter } },
-      sort: [{ [tsField]: { order: 'asc' as const, unmapped_type: 'date' } }],
-      size: 10000,
-      _source: false,
-    });
-
-    const eventIds = (result.hits?.hits ?? []).map((h: any) => h._id as string);
-    if (eventIds.length === 0) return 0;
-
-    // Clear acknowledged_at AND scored_at so the pipeline re-scores these events
+    const BATCH_SIZE = 5000;
     let totalUnacked = 0;
-    for (let i = 0; i < eventIds.length; i += 500) {
-      const chunk = eventIds.slice(i, i + 500);
-      const updated = await this.db('es_event_metadata')
-        .where({ system_id: this.systemId })
-        .whereIn('es_event_id', chunk)
-        .whereNotNull('acknowledged_at')
-        .update({ acknowledged_at: null, scored_at: null });
-      totalUnacked += updated;
-    }
+    let searchAfter: any[] | undefined;
+    let hasMore = true;
 
-    // Delete existing event_scores so the scoring pipeline re-scores these events
-    for (let i = 0; i < eventIds.length; i += 500) {
-      const chunk = eventIds.slice(i, i + 500);
-      await this.db('event_scores')
-        .whereIn('event_id', chunk)
-        .del();
+    while (hasMore) {
+      const searchOpts: any = {
+        index: base.index,
+        query: { bool: { filter: esFilter } },
+        sort: [{ [tsField]: { order: 'asc' as const, unmapped_type: 'date' } }, { _id: 'asc' as const }],
+        size: BATCH_SIZE,
+        _source: false,
+      };
+      if (searchAfter) searchOpts.search_after = searchAfter;
+
+      const result = await client.search(searchOpts);
+      const hits = result.hits?.hits ?? [];
+      if (hits.length === 0) { hasMore = false; break; }
+
+      const eventIds = hits.map((h: any) => h._id as string);
+
+      for (let i = 0; i < eventIds.length; i += 500) {
+        const chunk = eventIds.slice(i, i + 500);
+        const updated = await this.db('es_event_metadata')
+          .where({ system_id: this.systemId })
+          .whereIn('es_event_id', chunk)
+          .whereNotNull('acknowledged_at')
+          .update({ acknowledged_at: null, scored_at: null });
+        totalUnacked += updated;
+      }
+
+      for (let i = 0; i < eventIds.length; i += 500) {
+        await this.db('event_scores')
+          .whereIn('event_id', eventIds.slice(i, i + 500))
+          .del();
+      }
+
+      searchAfter = hits[hits.length - 1].sort;
+      if (hits.length < BATCH_SIZE) hasMore = false;
     }
 
     return totalUnacked;

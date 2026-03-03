@@ -11,7 +11,8 @@ import { getEventSource, getDefaultEventSource } from '../../services/eventSourc
 import { OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
-import { recalcEffectiveScores, DEFAULT_W_META } from '../events/recalcScores.js';
+import { DEFAULT_W_META } from '../events/recalcScores.js';
+import { queueEffectiveScoreRecalc } from '../events/recalcQueue.js';
 import { runPerEventScoringJob } from '../pipeline/scoringJob.js';
 
 /** In-memory tracker for background re-evaluate jobs. */
@@ -338,7 +339,18 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       }
 
       const rows = await query.select('*');
-      return reply.send(rows);
+      const parsedRows = rows.map((row: any) => {
+        const parseJson = (val: unknown) => {
+          if (typeof val !== 'string') return val;
+          try { return JSON.parse(val); } catch { return val; }
+        };
+        return {
+          ...row,
+          key_event_ids: row.key_event_ids ? parseJson(row.key_event_ids) : null,
+          mitre_techniques: row.mitre_techniques ? parseJson(row.mitre_techniques) : null,
+        };
+      });
+      return reply.send(parsedRows);
     },
   );
 
@@ -378,7 +390,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       });
 
       const updated = await db('findings').where({ id: findingId }).first();
-      return reply.send(updated);
+      if (!updated) return reply.code(404).send({ error: 'Finding not found after update' });
+      const parseJson = (val: unknown) => {
+        if (typeof val !== 'string') return val;
+        try { return JSON.parse(val); } catch { return val; }
+      };
+      return reply.send({
+        ...updated,
+        key_event_ids: updated.key_event_ids ? parseJson(updated.key_event_ids) : null,
+        mitre_techniques: updated.mitre_techniques ? parseJson(updated.mitre_techniques) : null,
+      });
     },
   );
 
@@ -417,7 +438,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       });
 
       const updated = await db('findings').where({ id: findingId }).first();
-      return reply.send(updated);
+      if (!updated) return reply.code(404).send({ error: 'Finding not found after update' });
+      const parseJson = (val: unknown) => {
+        if (typeof val !== 'string') return val;
+        try { return JSON.parse(val); } catch { return val; }
+      };
+      return reply.send({
+        ...updated,
+        key_event_ids: updated.key_event_ids ? parseJson(updated.key_event_ids) : null,
+        mitre_techniques: updated.mitre_techniques ? parseJson(updated.mitre_techniques) : null,
+      });
     },
   );
 
@@ -512,7 +542,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const system = await db('monitored_systems').where({ id: systemId }).first();
       if (!system) return reply.code(404).send({ error: 'System not found.' });
 
-      const updated = await recalcEffectiveScores(db, systemId);
+      queueEffectiveScoreRecalc(db, systemId, { skipNormalBehavior: false });
 
       await writeAuditLog(db, {
         actor_name: getActorName(request),
@@ -524,7 +554,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         session_id: request.currentSession?.id,
       });
 
-      return reply.send({ ok: true, updated_rows: updated });
+      return reply.send({ ok: true, recalc_status: 'queued' });
     },
   );
 
@@ -564,6 +594,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const eventCount = await sysEventSource.countEventsInTimeRange(systemId, from_ts, to_ts);
       if (eventCount === 0) {
         return reply.code(200).send({
+          status: 'done' as const,
           message: `No events in the last ${reevalWindowDays} day(s) to analyze.`,
           window_id: null,
           event_count: 0,
@@ -644,11 +675,9 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             logger.warn(`[${localTimestamp()}] Zeroing old meta_scores failed: ${err.message}`);
           }
 
-          try { await recalcEffectiveScores(db, systemId); } catch (err: any) {
-            logger.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);
-          }
+          queueEffectiveScoreRecalc(db, systemId, { skipNormalBehavior: false });
           logger.warn(
-            `[${localTimestamp()}] Re-evaluate [${systemName}]: recalc done in ${Date.now() - t2}ms ` +
+            `[${localTimestamp()}] Re-evaluate [${systemName}]: recalc queued in ${Date.now() - t2}ms ` +
             `(total=${Date.now() - t0}ms)`,
           );
 

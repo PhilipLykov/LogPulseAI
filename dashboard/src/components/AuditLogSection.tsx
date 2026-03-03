@@ -7,7 +7,8 @@ import {
   getAuditExportUrl,
   getStoredApiKey,
 } from '../api';
-import { EuDateInput, euToIso } from './EuDateInput';
+import { EuDateInput } from './EuDateInput';
+import { euToIso } from '../utils/dateTime';
 
 interface Props {
   onAuthError: () => void;

@@ -29,6 +29,8 @@ const ALLOWED_SORT_COLUMNS = new Set([
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 100;
 const FACET_LIMIT = 200;
+const MIN_CONTAINS_QUERY_LEN = 3;
+const CONTAINS_DEFAULT_LOOKBACK_DAYS = 30;
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -112,6 +114,8 @@ export class PgEventSource implements EventSource {
     const rawLimit = filters.limit ?? DEFAULT_LIMIT;
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), MAX_LIMIT) : DEFAULT_LIMIT;
     const offset = (page - 1) * limit;
+    const parsedFrom = from && !isNaN(Date.parse(from)) ? from : undefined;
+    const parsedTo = to && !isNaN(Date.parse(to)) ? to : undefined;
 
     const sortColumn = ALLOWED_SORT_COLUMNS.has(filters.sort_by ?? '') ? filters.sort_by! : 'timestamp';
     const sortDirection = filters.sort_dir === 'asc' ? 'asc' : 'desc';
@@ -158,13 +162,32 @@ export class PgEventSource implements EventSource {
     }
     if (service) baseQuery.where('events.service', service);
     if (trace_id) baseQuery.where('events.trace_id', trace_id);
-    if (from && !isNaN(Date.parse(from))) baseQuery.where('events.timestamp', '>=', from);
-    if (to && !isNaN(Date.parse(to))) baseQuery.where('events.timestamp', '<=', to);
+    if (parsedFrom) baseQuery.where('events.timestamp', '>=', parsedFrom);
+    if (parsedTo) baseQuery.where('events.timestamp', '<=', parsedTo);
 
     // Full-text search
     if (q && q.trim().length > 0) {
       const trimmed = q.trim();
       if (q_mode === 'contains') {
+        // Guardrail for expensive wildcard-like search patterns.
+        if (trimmed.length < MIN_CONTAINS_QUERY_LEN) {
+          return {
+            events: [],
+            total: 0,
+            page,
+            limit,
+            has_more: false,
+          };
+        }
+
+        // Keep unbounded substring scans from traversing very old partitions.
+        if (!parsedFrom && !parsedTo) {
+          const lookbackFrom = new Date(
+            Date.now() - CONTAINS_DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+          ).toISOString();
+          baseQuery.where('events.timestamp', '>=', lookbackFrom);
+        }
+
         baseQuery.where('events.message', 'ILIKE', `%${escapeLike(trimmed)}%`);
       } else {
         baseQuery.whereRaw(

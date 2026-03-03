@@ -405,6 +405,7 @@ export interface LogSource {
   label: string;
   selector: Record<string, string> | Record<string, string>[];
   priority: number;
+  parse_profile?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -434,9 +435,12 @@ export interface MetaResult {
   id: string;
   window_id: string;
   meta_scores: Record<string, number>;
+  analysis_confidence?: number | null;
   summary: string;
   findings: string[];
   recommended_action?: string;
+  key_event_ids?: string[] | null;
+  created_at?: string;
 }
 
 // ── Findings (persistent, per-system) ────────────────────────
@@ -448,6 +452,8 @@ export interface Finding {
   text: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   criterion_slug: string | null;
+  confidence: number | null;
+  mitre_techniques: string[] | null;
   status: 'open' | 'acknowledged' | 'resolved';
   acknowledged_at: string | null;
   acknowledged_by: string | null;
@@ -512,7 +518,15 @@ export async function checkReEvaluateStatus(systemId: string, jobId: string): Pr
   return apiFetch(`/api/v1/systems/${systemId}/re-evaluate-status/${jobId}`);
 }
 
-export async function recalculateScores(systemId: string): Promise<{ ok: boolean; updated_rows: number }> {
+export interface RecalculateScoresResponse {
+  ok: boolean;
+  /** New async flow: recalculation is queued and runs in background. */
+  recalc_status?: 'queued';
+  /** Legacy sync flow compatibility. */
+  updated_rows?: number;
+}
+
+export async function recalculateScores(systemId: string): Promise<RecalculateScoresResponse> {
   return apiFetch(`/api/v1/systems/${systemId}/recalculate-scores`, { method: 'POST' });
 }
 
@@ -599,7 +613,41 @@ export async function deleteSystem(id: string): Promise<void> {
   return apiFetch(`/api/v1/systems/${id}`, { method: 'DELETE' });
 }
 
+export interface TimezoneDetectionResult {
+  detected: boolean;
+  reason?: string;
+  offset_minutes?: number;
+  offset_label?: string;
+  suggested_tz_name?: string | null;
+  sample_count?: number;
+  span_hours?: number;
+  median_drift_minutes?: number;
+  iqr_minutes?: number;
+  current_tz_name?: string | null;
+  current_tz_offset?: number | null;
+}
+
+export async function detectTimezone(systemId: string): Promise<TimezoneDetectionResult> {
+  return apiFetch(`/api/v1/systems/${systemId}/detect-timezone`);
+}
+
 // ── Log Sources CRUD ─────────────────────────────────────────
+
+export interface ParseProfileSummary {
+  id: string;
+  label: string;
+  description: string;
+  category: 'database' | 'webserver' | 'network' | 'system' | 'security' | 'messaging' | 'general';
+  multiline_mode: 'none' | 'indent_only' | 'timestamp_head';
+  multiline_start_pattern?: string;
+  extracted_fields: string[];
+  under_the_hood: string[];
+  result_changes: string[];
+}
+
+export async function fetchParseProfiles(): Promise<ParseProfileSummary[]> {
+  return apiFetch('/api/v1/parse-profiles');
+}
 
 export async function fetchSources(systemId?: string): Promise<LogSource[]> {
   const params = systemId ? `?system_id=${systemId}` : '';
@@ -611,6 +659,7 @@ export async function createSource(data: {
   label: string;
   selector: Record<string, string> | Record<string, string>[];
   priority?: number;
+  parse_profile?: string | null;
 }): Promise<LogSource> {
   return apiFetch('/api/v1/sources', {
     method: 'POST',
@@ -620,7 +669,12 @@ export async function createSource(data: {
 
 export async function updateSource(
   id: string,
-  data: { label?: string; selector?: Record<string, string> | Record<string, string>[]; priority?: number },
+  data: {
+    label?: string;
+    selector?: Record<string, string> | Record<string, string>[];
+    priority?: number;
+    parse_profile?: string | null;
+  },
 ): Promise<LogSource> {
   return apiFetch(`/api/v1/sources/${id}`, {
     method: 'PUT',
@@ -765,6 +819,70 @@ export async function testNotificationChannel(id: string): Promise<{ status: str
   return apiFetch(`/api/v1/notification-channels/${id}/test`, { method: 'POST' });
 }
 
+// ── Scheduled Reports ─────────────────────────────────────────
+
+export interface ScheduledReportFilters {
+  system_ids?: string[];
+  lookback_hours?: number;
+}
+
+export interface ScheduledReport {
+  id: string;
+  name: string;
+  channel_id: string | null;
+  channel_name?: string | null;
+  schedule: string;
+  report_type: 'summary' | 'json' | 'csv';
+  filters: ScheduledReportFilters | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export async function fetchScheduledReports(): Promise<ScheduledReport[]> {
+  return apiFetch('/api/v1/scheduled-reports');
+}
+
+export async function createScheduledReport(data: {
+  name: string;
+  channel_id?: string | null;
+  schedule: string;
+  report_type?: 'summary' | 'json' | 'csv';
+  filters?: ScheduledReportFilters | null;
+  enabled?: boolean;
+}): Promise<ScheduledReport> {
+  return apiFetch('/api/v1/scheduled-reports', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateScheduledReport(
+  id: string,
+  data: Partial<{
+    name: string;
+    channel_id: string | null;
+    schedule: string;
+    report_type: 'summary' | 'json' | 'csv';
+    filters: ScheduledReportFilters | null;
+    enabled: boolean;
+  }>,
+): Promise<ScheduledReport> {
+  return apiFetch(`/api/v1/scheduled-reports/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteScheduledReport(id: string): Promise<void> {
+  return apiFetch(`/api/v1/scheduled-reports/${id}`, { method: 'DELETE' });
+}
+
+export async function runScheduledReportNow(id: string): Promise<{ ok: boolean; message: string; report: ScheduledReport }> {
+  return apiFetch(`/api/v1/scheduled-reports/${id}/run-now`, { method: 'POST' });
+}
+
 // ── Notification Rules ───────────────────────────────────────
 
 export interface NotificationRule {
@@ -795,6 +913,8 @@ export async function createNotificationRule(data: {
   throttle_interval_seconds?: number;
   send_recovery?: boolean;
   notify_only_on_state_change?: boolean;
+  template_title?: string | null;
+  template_body?: string | null;
   enabled?: boolean;
 }): Promise<NotificationRule> {
   return apiFetch('/api/v1/notification-rules', {
@@ -811,6 +931,8 @@ export async function updateNotificationRule(
     throttle_interval_seconds: number | null;
     send_recovery: boolean;
     notify_only_on_state_change: boolean;
+    template_title: string | null;
+    template_body: string | null;
     enabled: boolean;
   }>,
 ): Promise<NotificationRule> {
@@ -1172,8 +1294,7 @@ export interface AckEventsParams {
 export interface AckEventsResponse {
   acknowledged: number;
   message: string;
-  updated_windows?: number;
-  transitioned_findings?: number;
+  recalc_status?: 'queued';
 }
 
 export async function acknowledgeEvents(params: AckEventsParams): Promise<AckEventsResponse> {
@@ -1183,7 +1304,7 @@ export async function acknowledgeEvents(params: AckEventsParams): Promise<AckEve
   });
 }
 
-export async function unacknowledgeEvents(params: AckEventsParams): Promise<{ unacknowledged: number; updated_windows?: number; message: string }> {
+export async function unacknowledgeEvents(params: AckEventsParams): Promise<{ unacknowledged: number; recalc_status?: 'queued'; message: string }> {
   return apiFetch('/api/v1/events/unacknowledge', {
     method: 'POST',
     body: JSON.stringify(params),
@@ -1199,8 +1320,7 @@ export interface AckGroupParams {
 
 export interface AckGroupResponse {
   acknowledged: number;
-  updated_windows?: number;
-  transitioned_findings?: number;
+  recalc_status?: 'queued';
   message: string;
 }
 
@@ -1211,7 +1331,7 @@ export async function acknowledgeEventGroup(params: AckGroupParams): Promise<Ack
   });
 }
 
-export async function unacknowledgeEventGroup(params: AckGroupParams): Promise<{ unacknowledged: number; updated_windows?: number; message: string }> {
+export async function unacknowledgeEventGroup(params: AckGroupParams): Promise<{ unacknowledged: number; recalc_status?: 'queued'; message: string }> {
   return apiFetch('/api/v1/events/unacknowledge-group', {
     method: 'POST',
     body: JSON.stringify(params),
@@ -1546,8 +1666,17 @@ export function getBackupDownloadUrl(filename: string): string {
   return `${BASE_URL}/api/v1/maintenance/backup/download/${encodeURIComponent(filename)}`;
 }
 
-export function getApiKeyForDownload(): string {
-  return getSessionToken();
+export function getDownloadAuthHeaders(): Record<string, string> {
+  const sessionToken = getSessionToken();
+  if (sessionToken) {
+    return { Authorization: `Bearer ${sessionToken}` };
+  }
+  // Legacy fallback for old API-key-only sessions.
+  const legacyApiKey = localStorage.getItem('apiKey') ?? '';
+  if (legacyApiKey) {
+    return { 'X-API-Key': legacyApiKey };
+  }
+  return {};
 }
 
 export async function deleteBackup(filename: string): Promise<{ deleted: boolean; filename: string }> {

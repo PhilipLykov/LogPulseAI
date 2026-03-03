@@ -19,6 +19,10 @@ export interface StructuredFinding {
   text: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   criterion?: string;  // criterion slug, e.g. 'it_security'
+  /** LLM confidence for this finding (0..1). */
+  confidence?: number;
+  /** Optional MITRE ATT&CK technique IDs (e.g. T1190, T1059.003). */
+  mitre_techniques?: string[];
 }
 
 /** Context from previous analysis runs, fed to LLM for continuity. */
@@ -31,6 +35,8 @@ export interface MetaAnalysisContext {
     text: string;
     severity: string;
     criterion?: string;
+    confidence?: number;
+    mitre_techniques?: string[];
     /** Status: 'open' or 'acknowledged'. */
     status?: string;
     /** When the finding was first created. */
@@ -61,6 +67,8 @@ export interface ResolvedFindingEntry {
 
 export interface MetaAnalysisResult {
   meta_scores: MetaScores;
+  /** LLM confidence for the overall window assessment (0..1). */
+  analysis_confidence?: number;
   summary: string;
   /** Structured findings (new ones produced by this analysis). */
   findings: StructuredFinding[];
@@ -318,11 +326,14 @@ Events annotated with (xN) indicate N occurrences of the same message in this wi
 
 Return a JSON object with:
 - meta_scores: object with 6 keys (it_security, performance_degradation, failure_prediction, anomaly, compliance_audit, operational_risk), each a float 0.0-1.0
+- analysis_confidence: float 0.0-1.0 for confidence in this overall analysis (optional but recommended)
 - summary: 2-4 sentence summary of the window's overall status, referencing trends if visible
 - new_findings: array of genuinely NEW finding objects not already covered by any open finding. Each with:
     - text: specific, actionable finding description referencing specific events
     - severity: one of "critical", "high", "medium", "low", "info" (use the calibration definitions above)
     - criterion: most relevant criterion slug (it_security, performance_degradation, failure_prediction, anomaly, compliance_audit, operational_risk) or null
+    - confidence: float 0.0-1.0 representing confidence for this finding (optional)
+    - mitre_techniques: array of MITRE ATT&CK technique IDs when relevant (especially IT Security), e.g. ["T1190","T1059.003"] (optional)
 - resolved_indices: array of objects with "index" (integer from the "Previously open findings" list), "evidence" (brief explanation referencing specific events), and "event_refs" (array of event numbers from current window that prove resolution). ONLY include findings where you see EXPLICIT POSITIVE EVIDENCE of resolution IN THE CURRENT EVENTS.
 - still_active_indices: array of integers — indices of open findings that you can confirm are STILL ACTIVE based on the current events. If you see error events that match an existing open finding (even partially), include that finding's index here.
 - recommended_action: one short recommended action (optional)
@@ -580,6 +591,12 @@ export class OpenAiAdapter implements LlmAdapter {
         if (f.last_seen_at) {
           metaParts.push(`last: ${humanAge(f.last_seen_at)} ago`);
         }
+        if (typeof f.confidence === 'number') {
+          metaParts.push(`confidence: ${Math.round(clamp(f.confidence) * 100)}%`);
+        }
+        if (f.mitre_techniques?.length) {
+          metaParts.push(`mitre: ${f.mitre_techniques.join(', ')}`);
+        }
         if (metaParts.length > 0) {
           line += ` | ${metaParts.join(' | ')}`;
         }
@@ -631,14 +648,23 @@ export class OpenAiAdapter implements LlmAdapter {
         compliance_audit: clamp(parsed.meta_scores?.compliance_audit ?? 0),
         operational_risk: clamp(parsed.meta_scores?.operational_risk ?? 0),
       };
+      const analysisConfidence = (parsed.analysis_confidence === null || parsed.analysis_confidence === undefined)
+        ? undefined
+        : clamp(parsed.analysis_confidence);
 
       // Parse structured findings (new format)
       const rawNewFindings = Array.isArray(parsed.new_findings) ? parsed.new_findings : [];
-      const structuredFindings: StructuredFinding[] = rawNewFindings.map((f: any) => ({
-        text: typeof f.text === 'string' ? f.text : String(f),
-        severity: (['critical', 'high', 'medium', 'low', 'info'].includes(f.severity) ? f.severity : 'medium') as StructuredFinding['severity'],
-        criterion: typeof f.criterion === 'string' && CRITERIA_SLUGS.includes(f.criterion as CriterionSlug) ? f.criterion : undefined,
-      }));
+      const structuredFindings: StructuredFinding[] = rawNewFindings.map((f: any) => {
+        const confidence = typeof f?.confidence === 'number' ? clamp(f.confidence) : undefined;
+        const mitreTechniques = sanitizeMitreTechniques(f?.mitre_techniques);
+        return {
+          text: typeof f?.text === 'string' ? f.text : String(f),
+          severity: (['critical', 'high', 'medium', 'low', 'info'].includes(f?.severity) ? f.severity : 'medium') as StructuredFinding['severity'],
+          criterion: typeof f?.criterion === 'string' && CRITERIA_SLUGS.includes(f.criterion as CriterionSlug) ? f.criterion : undefined,
+          confidence,
+          mitre_techniques: mitreTechniques,
+        };
+      });
 
       // Backward compat: also accept plain "findings" array of strings
       let flatFindings: string[] = [];
@@ -690,6 +716,7 @@ export class OpenAiAdapter implements LlmAdapter {
       return {
         result: {
           meta_scores: metaScores,
+          analysis_confidence: analysisConfidence,
           summary: parsed.summary ?? '',
           findings: structuredFindings,
           findingsFlat: flatFindings,
@@ -841,6 +868,27 @@ function emptyScoreResult(): ScoreResult {
     compliance_audit: 0,
     operational_risk: 0,
   };
+}
+
+const MITRE_TECHNIQUE_RE = /^T\d{4}(?:\.\d{3})?$/;
+
+function sanitizeMitreTechniques(input: unknown): string[] | undefined {
+  const out: string[] = [];
+  const rawItems = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(/[,\s]+/g)
+      : [];
+
+  for (const item of rawItems) {
+    if (typeof item !== 'string') continue;
+    const cleaned = item.trim().toUpperCase();
+    if (!MITRE_TECHNIQUE_RE.test(cleaned)) continue;
+    if (!out.includes(cleaned)) out.push(cleaned);
+    if (out.length >= 25) break;
+  }
+
+  return out.length > 0 ? out : undefined;
 }
 
 /** Convert an ISO timestamp to a human-readable relative age string (e.g. "3h", "2d"). */

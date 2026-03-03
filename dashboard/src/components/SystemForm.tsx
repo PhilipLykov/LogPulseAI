@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
-import { type EsConnection, fetchEsConnections } from '../api';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { type EsConnection, fetchEsConnections, detectTimezone, type TimezoneDetectionResult } from '../api';
 
 interface SystemFormProps {
   title: string;
+  systemId?: string;
   initialName?: string;
   initialDescription?: string;
   initialRetentionDays?: number | null;
@@ -25,6 +26,12 @@ export interface SystemFormData {
   event_source: 'postgresql' | 'elasticsearch';
   es_connection_id: string | null;
   es_config: Record<string, unknown> | null;
+}
+
+interface EsConfigDraft {
+  index_pattern?: string;
+  timestamp_field?: string;
+  message_field?: string;
 }
 
 /** Common UTC timezone offsets for the dropdown. */
@@ -130,6 +137,7 @@ const IANA_TIMEZONES = [
 
 export function SystemForm({
   title,
+  systemId,
   initialName = '',
   initialDescription = '',
   initialRetentionDays = null,
@@ -142,6 +150,7 @@ export function SystemForm({
   onCancel,
   saving,
 }: SystemFormProps) {
+  const initialEs = initialEsConfig as EsConfigDraft | null;
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
   const [retentionMode, setRetentionMode] = useState<'global' | 'custom'>(
@@ -164,27 +173,39 @@ export function SystemForm({
   // Event source state
   const [eventSource, setEventSource] = useState<'postgresql' | 'elasticsearch'>(initialEventSource);
   const [esConnectionId, setEsConnectionId] = useState<string | null>(initialEsConnectionId);
-  const [indexPattern, setIndexPattern] = useState<string>((initialEsConfig as any)?.index_pattern ?? '');
-  const [timestampField, setTimestampField] = useState<string>((initialEsConfig as any)?.timestamp_field ?? '@timestamp');
-  const [messageField, setMessageField] = useState<string>((initialEsConfig as any)?.message_field ?? 'message');
+  const [indexPattern, setIndexPattern] = useState<string>(initialEs?.index_pattern ?? '');
+  const [timestampField, setTimestampField] = useState<string>(initialEs?.timestamp_field ?? '@timestamp');
+  const [messageField, setMessageField] = useState<string>(initialEs?.message_field ?? 'message');
 
   // ES connections list
   const [esConnections, setEsConnections] = useState<EsConnection[]>([]);
   const [esLoading, setEsLoading] = useState(false);
 
+  // Auto-timezone detection
+  const [tzDetecting, setTzDetecting] = useState(false);
+  const [tzDetection, setTzDetection] = useState<TimezoneDetectionResult | null>(null);
+
   useEffect(() => {
     nameRef.current?.focus();
+  }, []);
+
+  const loadEsConnections = useCallback(async () => {
+    setEsLoading(true);
+    try {
+      const list = await fetchEsConnections();
+      setEsConnections(list);
+    } catch {
+      // Ignore in form; validation and submit will still guard missing connection.
+    } finally {
+      setEsLoading(false);
+    }
   }, []);
 
   // Load ES connections when Elasticsearch is selected
   useEffect(() => {
     if (eventSource !== 'elasticsearch') return;
-    setEsLoading(true);
-    fetchEsConnections()
-      .then(setEsConnections)
-      .catch(() => { /* ignore */ })
-      .finally(() => setEsLoading(false));
-  }, [eventSource]);
+    void loadEsConnections();
+  }, [eventSource, loadEsConnections]);
 
   // Close on Escape
   useEffect(() => {
@@ -216,6 +237,7 @@ export function SystemForm({
     let esConfig: Record<string, unknown> | null = null;
     if (eventSource === 'elasticsearch') {
       esConfig = {
+        ...(initialEsConfig && typeof initialEsConfig === 'object' ? initialEsConfig : {}),
         index_pattern: indexPattern.trim(),
         timestamp_field: timestampField.trim() || '@timestamp',
         message_field: messageField.trim() || 'message',
@@ -477,12 +499,90 @@ export function SystemForm({
               </select>
             )}
 
+            {systemId && eventSource !== 'elasticsearch' && (
+              <div style={{ marginTop: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-outline"
+                  disabled={tzDetecting}
+                  onClick={async () => {
+                    setTzDetecting(true);
+                    setTzDetection(null);
+                    try {
+                      const result = await detectTimezone(systemId);
+                      setTzDetection(result);
+                    } catch {
+                      setTzDetection({ detected: false, reason: 'Detection request failed.' });
+                    } finally {
+                      setTzDetecting(false);
+                    }
+                  }}
+                >
+                  {tzDetecting ? 'Detecting...' : 'Auto-detect timezone'}
+                </button>
+
+                {tzDetection && !tzDetection.detected && (
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                    {tzDetection.reason}
+                  </span>
+                )}
+
+                {tzDetection?.detected && (
+                  <div className="tz-detection-result" style={{
+                    marginTop: '8px',
+                    padding: '10px 14px',
+                    background: 'var(--bg-alt, #f0f4ff)',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border, #d0d8e8)',
+                    fontSize: '0.85rem',
+                  }}>
+                    <div style={{ marginBottom: '6px' }}>
+                      <strong>Detected offset:</strong> {tzDetection.offset_label}
+                      {tzDetection.suggested_tz_name && (
+                        <> (matches <strong>{tzDetection.suggested_tz_name}</strong>)</>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      Based on {tzDetection.sample_count} events over {tzDetection.span_hours}h
+                      {' '}(median drift: {tzDetection.median_drift_minutes} min, IQR: {tzDetection.iqr_minutes} min)
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      onClick={() => {
+                        if (tzDetection.suggested_tz_name) {
+                          setTzMode('iana');
+                          setTzName(tzDetection.suggested_tz_name);
+                        } else if (tzDetection.offset_minutes != null) {
+                          setTzMode('offset');
+                          setTzOffset(String(tzDetection.offset_minutes));
+                        }
+                        setTzDetection(null);
+                      }}
+                    >
+                      Apply {tzDetection.suggested_tz_name
+                        ? `"${tzDetection.suggested_tz_name}" (DST-aware)`
+                        : tzDetection.offset_label}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      onClick={() => setTzDetection(null)}
+                      style={{ marginLeft: '6px' }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
               {tzMode === 'none'
-                ? 'No timezone correction. Use when source timestamps already include timezone info (RFC 5424, ISO 8601).'
+                ? 'No timezone correction. Timestamps with embedded timezone info (RFC 5424, ISO 8601 with Z/offset) are already handled automatically.'
                 : tzMode === 'iana'
-                ? 'Select the source device\'s timezone. Automatically handles DST (summer/winter time) transitions.'
-                : 'Fixed offset for sources without DST. Does NOT adjust for summer/winter time changes.'}
+                ? 'Select the source device\'s timezone. Automatically handles DST (summer/winter time) transitions. Only applied to timestamps without embedded timezone info.'
+                : 'Fixed offset for sources without DST. Does NOT adjust for summer/winter time changes. Only applied to timestamps without embedded timezone info.'}
             </span>
           </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   type MonitoredSystem,
   type LogSource,
@@ -27,7 +27,7 @@ import { ElasticsearchSettings } from './ElasticsearchSettings';
 import { NormalBehaviorPanel } from './NormalBehaviorPanel';
 import { DashboardConfigSection } from './DashboardConfigSection';
 import { DiscoveryPanel } from './DiscoveryPanel';
-import { hasPermission } from '../App';
+import { hasPermission } from '../utils/permissions';
 
 interface SettingsViewProps {
   onAuthError: () => void;
@@ -77,8 +77,10 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
   const [error, setError] = useState('');
   const [modal, setModal] = useState<Modal>(null);
   const [saving, setSaving] = useState(false);
+  const sourceFetchId = useRef(0);
 
   const selectedSystem = systems.find((s) => s.id === selectedSystemId) ?? null;
+  const canManageSystems = hasPermission(currentUser ?? null, 'systems:manage');
 
   // Navigate to requested tab when initialTab prop changes
   useEffect(() => {
@@ -108,11 +110,14 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
 
   // ── Load sources for selected system ────────────────────────
   const loadSources = useCallback(async (systemId: string) => {
+    const requestId = ++sourceFetchId.current;
     try {
       setSourcesLoading(true);
       const data = await fetchSources(systemId);
-      setSources(data);
+      if (requestId !== sourceFetchId.current) return;
+      setSources(sortSourcesByPriority(data));
     } catch (err: unknown) {
+      if (requestId !== sourceFetchId.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
         onAuthError();
@@ -120,7 +125,9 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
       }
       setError(msg);
     } finally {
-      setSourcesLoading(false);
+      if (requestId === sourceFetchId.current) {
+        setSourcesLoading(false);
+      }
     }
   }, [onAuthError]);
 
@@ -132,6 +139,7 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
     if (selectedSystemId) {
       loadSources(selectedSystemId);
     } else {
+      sourceFetchId.current++;
       setSources([]);
     }
   }, [selectedSystemId, loadSources]);
@@ -211,12 +219,19 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
     label: string,
     selector: Record<string, string> | Record<string, string>[],
     priority: number,
+    parseProfile: string | null,
   ) => {
     setSaving(true);
     setError('');
     try {
-      const created = await createSource({ system_id: systemId, label, selector, priority });
-      setSources((prev) => [...prev, created]);
+      const created = await createSource({
+        system_id: systemId,
+        label,
+        selector,
+        priority,
+        parse_profile: parseProfile,
+      });
+      setSources((prev) => sortSourcesByPriority([...prev, created]));
       setModal(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -231,12 +246,18 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
     label: string,
     selector: Record<string, string> | Record<string, string>[],
     priority: number,
+    parseProfile: string | null,
   ) => {
     setSaving(true);
     setError('');
     try {
-      const updated = await updateSource(id, { label, selector, priority });
-      setSources((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      const updated = await updateSource(id, {
+        label,
+        selector,
+        priority,
+        parse_profile: parseProfile,
+      });
+      setSources((prev) => sortSourcesByPriority(prev.map((s) => (s.id === id ? updated : s))));
       setModal(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -451,6 +472,7 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
                   className="btn btn-sm"
                   onClick={() => setModal({ kind: 'create-system' })}
                   aria-label="Add monitored system"
+                  disabled={!canManageSystems}
                 >
                   + Add
                 </button>
@@ -517,32 +539,36 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
                       )}
                       <span className="settings-system-id">ID: {selectedSystem.id}</span>
                     </div>
-                    <div className="settings-system-actions">
-                      <button
-                        className="btn btn-sm btn-outline"
-                        onClick={() => setModal({ kind: 'edit-system', system: selectedSystem })}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => setModal({ kind: 'delete-system', system: selectedSystem })}
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    {canManageSystems && (
+                      <div className="settings-system-actions">
+                        <button
+                          className="btn btn-sm btn-outline"
+                          onClick={() => setModal({ kind: 'edit-system', system: selectedSystem })}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => setModal({ kind: 'delete-system', system: selectedSystem })}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Sources section */}
                   <div className="settings-sources-section">
                     <div className="settings-sources-header">
                       <h4>Log Sources</h4>
-                      <button
-                        className="btn btn-sm"
-                        onClick={() => setModal({ kind: 'create-source', systemId: selectedSystem.id })}
-                      >
-                        + Add Source
-                      </button>
+                      {canManageSystems && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setModal({ kind: 'create-source', systemId: selectedSystem.id })}
+                        >
+                          + Add Source
+                        </button>
+                      )}
                     </div>
 
                     {sourcesLoading ? (
@@ -566,7 +592,7 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
                               <th>Label</th>
                               <th>Selector</th>
                               <th>Priority</th>
-                              <th className="col-actions">Actions</th>
+                              {canManageSystems && <th className="col-actions">Actions</th>}
                             </tr>
                           </thead>
                           <tbody>
@@ -579,20 +605,22 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
                                   </code>
                                 </td>
                                 <td>{src.priority}</td>
-                                <td className="col-actions">
-                                  <button
-                                    className="btn btn-xs btn-outline"
-                                    onClick={() => setModal({ kind: 'edit-source', source: src })}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    className="btn btn-xs btn-danger-outline"
-                                    onClick={() => setModal({ kind: 'delete-source', source: src })}
-                                  >
-                                    Delete
-                                  </button>
-                                </td>
+                                {canManageSystems && (
+                                  <td className="col-actions">
+                                    <button
+                                      className="btn btn-xs btn-outline"
+                                      onClick={() => setModal({ kind: 'edit-source', source: src })}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      className="btn btn-xs btn-danger-outline"
+                                      onClick={() => setModal({ kind: 'delete-source', source: src })}
+                                    >
+                                      Delete
+                                    </button>
+                                  </td>
+                                )}
                               </tr>
                             ))}
                           </tbody>
@@ -630,7 +658,7 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
           </div>
 
           {/* ── Modals ── */}
-          {modal?.kind === 'create-system' && (
+          {modal?.kind === 'create-system' && canManageSystems && (
             <SystemForm
               title="Create Monitored System"
               initialTzName={null}
@@ -640,9 +668,10 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
             />
           )}
 
-          {modal?.kind === 'edit-system' && (
+          {modal?.kind === 'edit-system' && canManageSystems && (
             <SystemForm
               title="Edit System"
+              systemId={modal.system.id}
               initialName={modal.system.name}
               initialDescription={modal.system.description}
               initialRetentionDays={modal.system.retention_days}
@@ -657,7 +686,7 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
             />
           )}
 
-          {modal?.kind === 'delete-system' && (
+          {modal?.kind === 'delete-system' && canManageSystems && (
             <ConfirmDialog
               title="Delete System"
               message={`Are you sure you want to delete "${modal.system.name}"? This will permanently remove all its log sources, events, scores, and analysis data. This action cannot be undone.`}
@@ -669,32 +698,33 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
             />
           )}
 
-          {modal?.kind === 'create-source' && (
+          {modal?.kind === 'create-source' && canManageSystems && (
             <SourceForm
               title="Add Log Source"
-              onSave={(label, selector, priority) =>
-                handleCreateSource(modal.systemId, label, selector, priority)
+              onSave={(label, selector, priority, parseProfile) =>
+                handleCreateSource(modal.systemId, label, selector, priority, parseProfile)
               }
               onCancel={() => setModal(null)}
               saving={saving}
             />
           )}
 
-          {modal?.kind === 'edit-source' && (
+          {modal?.kind === 'edit-source' && canManageSystems && (
             <SourceForm
               title="Edit Log Source"
               initialLabel={modal.source.label}
               initialSelector={modal.source.selector}
               initialPriority={modal.source.priority}
-              onSave={(label, selector, priority) =>
-                handleUpdateSource(modal.source.id, label, selector, priority)
+              initialParseProfile={modal.source.parse_profile ?? null}
+              onSave={(label, selector, priority, parseProfile) =>
+                handleUpdateSource(modal.source.id, label, selector, priority, parseProfile)
               }
               onCancel={() => setModal(null)}
               saving={saving}
             />
           )}
 
-          {modal?.kind === 'delete-source' && (
+          {modal?.kind === 'delete-source' && canManageSystems && (
             <ConfirmDialog
               title="Delete Log Source"
               message={`Are you sure you want to delete the source "${modal.source.label}"? Events already collected will remain, but new events will no longer match this source.`}
@@ -709,6 +739,14 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
       )}
     </div>
   );
+}
+
+function sortSourcesByPriority(sources: LogSource[]): LogSource[] {
+  return [...sources].sort((a, b) => {
+    const byPriority = a.priority - b.priority;
+    if (byPriority !== 0) return byPriority;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 /** Format selector object (or array of groups) for display. */

@@ -2,6 +2,8 @@ import type { Knex } from 'knex';
 import type { NormalizedEvent, LogSource, LogSourceSelector } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
 import { logger } from '../../config/logger.js';
+import { getParseProfile } from './parseProfiles.js';
+import type { MultilineSourceHint } from './multiline.js';
 
 /**
  * Cached log sources, sorted by priority (ascending = evaluated first).
@@ -66,6 +68,7 @@ export interface SourceMatch {
   system_id: string;
   log_source_id: string;
   isCatchAll: boolean;
+  parse_profile: string | null;
 }
 
 /**
@@ -92,11 +95,47 @@ export async function matchSource(
         system_id: source.system_id,
         log_source_id: source.id,
         isCatchAll: isCatchAllSelector(source.selector),
+        parse_profile: source.parse_profile ?? null,
       };
     }
   }
 
   return null;
+}
+
+/**
+ * Source hints used by multiline pre-processing.
+ * Only sources with a valid parse profile are returned.
+ */
+export async function getSourceHints(db: Knex): Promise<MultilineSourceHint[]> {
+  const sources = await loadSources(db);
+  const hints: MultilineSourceHint[] = [];
+
+  for (const source of sources) {
+    if (!source.parse_profile || typeof source.parse_profile !== 'string') continue;
+    const profile = getParseProfile(source.parse_profile);
+    if (!profile) continue;
+
+    const hint: MultilineSourceHint = {
+      source_id: source.id,
+      selector: source.selector,
+      parse_profile: source.parse_profile,
+      multiline_mode: profile.multiline.mode,
+    };
+
+    if (profile.multiline.mode === 'timestamp_head' && profile.multiline.startPattern) {
+      try {
+        hint.multiline_start_re = new RegExp(profile.multiline.startPattern);
+      } catch {
+        // Static profile validation guard: ignore invalid start regex.
+        continue;
+      }
+    }
+
+    hints.push(hint);
+  }
+
+  return hints;
 }
 
 const WILDCARD_PATTERNS = new Set(['.*', '^.*$', '.+', '^.+$']);

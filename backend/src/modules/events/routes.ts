@@ -6,7 +6,7 @@ import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
-import { recalcEffectiveScores } from './recalcScores.js';
+import { queueEffectiveScoreRecalc } from './recalcQueue.js';
 
 /**
  * Transition open findings to 'acknowledged' status when their text
@@ -268,17 +268,13 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        // Recalculate scores synchronously so the frontend receives
-        // fresh data when it refreshes after the response.
-        try {
-          await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
-        } catch (err: any) {
-          app.log.error(`[${localTimestamp()}] Effective score recalc after ack failed: ${err.message}`);
-        }
+        // Queue score recalculation asynchronously (coalesced per system).
+        queueEffectiveScoreRecalc(db, sysId, { skipNormalBehavior: true });
 
         reply.send({
           acknowledged: totalAcked,
           message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
+          recalc_status: 'queued',
         });
 
         // Finding transition can run in the background (doesn't affect score bars)
@@ -375,15 +371,12 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        try {
-          await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
-        } catch (err: any) {
-          app.log.error(`[${localTimestamp()}] Effective score recalc after unack failed: ${err.message}`);
-        }
+        queueEffectiveScoreRecalc(db, sysId, { skipNormalBehavior: true });
 
         return reply.send({
           unacknowledged: result,
           message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
+          recalc_status: 'queued',
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Event un-acknowledge error: ${err.message}`);
@@ -520,18 +513,12 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        // Recalculate scores synchronously so the frontend receives
-        // fresh data when it refreshes after the response.
-        try {
-          const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
-          app.log.debug(`[${localTimestamp()}] Group ack: ${updatedWindows} windows recalculated (system=${system_id})`);
-        } catch (err: any) {
-          app.log.error(`[${localTimestamp()}] Effective score recalc after group ack failed: ${err.message}`);
-        }
+        queueEffectiveScoreRecalc(db, system_id, { skipNormalBehavior: true });
 
         reply.send({
           acknowledged: ackResult,
           message: `${ackResult} event${ackResult !== 1 ? 's' : ''} in group acknowledged.`,
+          recalc_status: 'queued',
         });
 
         // Finding transition can run in the background (doesn't affect score bars)
@@ -666,16 +653,12 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        try {
-          const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
-          app.log.debug(`[${localTimestamp()}] Group unack: ${updatedWindows} windows recalculated (system=${system_id})`);
-        } catch (err: any) {
-          app.log.error(`[${localTimestamp()}] Effective score recalc after group unack failed: ${err.message}`);
-        }
+        queueEffectiveScoreRecalc(db, system_id, { skipNormalBehavior: true });
 
         return reply.send({
           unacknowledged: unackCount,
           message: `${unackCount} event${unackCount !== 1 ? 's' : ''} in group un-acknowledged.`,
+          recalc_status: 'queued',
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Group event un-acknowledge error: ${err.message}`);

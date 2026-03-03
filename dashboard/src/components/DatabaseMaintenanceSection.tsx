@@ -16,7 +16,7 @@ import {
   triggerBackup,
   fetchBackupList,
   getBackupDownloadUrl,
-  getApiKeyForDownload,
+  getDownloadAuthHeaders,
   deleteBackup,
   fetchDatabaseInfo,
 } from '../api';
@@ -239,7 +239,7 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
     try {
       const url = getBackupDownloadUrl(filename);
       const res = await fetch(url, {
-        headers: { 'X-API-Key': getApiKeyForDownload() },
+        headers: getDownloadAuthHeaders(),
       });
       if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
       const blob = await res.blob();

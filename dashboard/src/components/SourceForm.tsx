@@ -1,11 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
+import { fetchParseProfiles, type ParseProfileSummary } from '../api';
 
 interface SourceFormProps {
   title: string;
   initialLabel?: string;
   initialSelector?: Record<string, string> | Record<string, string>[];
   initialPriority?: number;
-  onSave: (label: string, selector: Record<string, string> | Record<string, string>[], priority: number) => void;
+  initialParseProfile?: string | null;
+  onSave: (
+    label: string,
+    selector: Record<string, string> | Record<string, string>[],
+    priority: number,
+    parseProfile: string | null,
+  ) => void;
   onCancel: () => void;
   saving: boolean;
 }
@@ -56,7 +63,7 @@ function autoEscapePattern(field: string, pattern: string): string {
 
   if (field === 'host') {
     // Plain hostname with dots: web-01.example.com
-    if (/^[a-zA-Z0-9][a-zA-Z0-9.\-]*$/.test(trimmed)) {
+    if (/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(trimmed)) {
       return `^${trimmed.replace(/\./g, '\\.')}$`;
     }
   }
@@ -82,11 +89,25 @@ function groupsToSelector(groups: SelectorGroup[]): Record<string, string> | Rec
   return validGroups;
 }
 
+function profileCategoryLabel(category: ParseProfileSummary['category']): string {
+  switch (category) {
+    case 'database': return 'Database';
+    case 'webserver': return 'Web Server';
+    case 'network': return 'Network';
+    case 'system': return 'System';
+    case 'security': return 'Security';
+    case 'messaging': return 'Messaging';
+    case 'general': return 'General';
+    default: return category;
+  }
+}
+
 export function SourceForm({
   title,
   initialLabel = '',
   initialSelector,
   initialPriority = 0,
+  initialParseProfile = null,
   onSave,
   onCancel,
   saving,
@@ -96,9 +117,19 @@ export function SourceForm({
     selectorToGroups(initialSelector ?? {}),
   );
   const [priority, setPriority] = useState(String(initialPriority));
+  const [parseProfile, setParseProfile] = useState<string>(initialParseProfile ?? '');
+  const [parseProfiles, setParseProfiles] = useState<ParseProfileSummary[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const labelRef = useRef<HTMLInputElement>(null);
   const mouseDownOnOverlay = useRef(false);
+  const selectedProfile = parseProfiles.find((p) => p.id === parseProfile) ?? null;
+  const groupedProfiles = parseProfiles.reduce<Record<string, ParseProfileSummary[]>>((acc, profile) => {
+    const key = profile.category;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(profile);
+    return acc;
+  }, {});
 
   useEffect(() => {
     labelRef.current?.focus();
@@ -111,6 +142,26 @@ export function SourceForm({
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [onCancel]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setProfilesLoading(true);
+      try {
+        const profiles = await fetchParseProfiles();
+        if (mounted) {
+          setParseProfiles(profiles);
+        }
+      } catch {
+        // Non-critical: keep "None" as a safe fallback.
+      } finally {
+        if (mounted) {
+          setProfilesLoading(false);
+        }
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const updateGroupRow = (gi: number, ri: number, field: Partial<SelectorRow>) => {
     setGroups(prev => prev.map((g, i) => i === gi
@@ -156,7 +207,18 @@ export function SourceForm({
     }
 
     for (let gi = 0; gi < groups.length; gi++) {
+      const usedFields = new Set<string>();
       for (let ri = 0; ri < groups[gi].rows.length; ri++) {
+        const fieldName = groups[gi].rows[ri].field.trim();
+        if (fieldName) {
+          if (usedFields.has(fieldName)) {
+            errs[`group-${gi}-duplicate`] =
+              `Field "${fieldName}" is duplicated in this AND group. Use one condition per field.`;
+          } else {
+            usedFields.add(fieldName);
+          }
+        }
+
         const pattern = groups[gi].rows[ri].pattern.trim();
         if (pattern) {
           try { new RegExp(pattern); } catch { errs[`pattern-${gi}-${ri}`] = 'Invalid regex pattern.'; }
@@ -177,7 +239,7 @@ export function SourceForm({
     e.preventDefault();
     if (!validate()) return;
     const selector = groupsToSelector(groups);
-    onSave(label.trim(), selector, Number(priority));
+    onSave(label.trim(), selector, Number(priority), parseProfile || null);
   };
 
   return (
@@ -234,7 +296,13 @@ export function SourceForm({
                           className="selector-field"
                         >
                           {SELECTOR_FIELDS.map((f) => (
-                            <option key={f} value={f}>{f}</option>
+                            <option
+                              key={f}
+                              value={f}
+                              disabled={group.rows.some((r, idx) => idx !== ri && r.field === f)}
+                            >
+                              {f}
+                            </option>
                           ))}
                         </select>
                         <span className="selector-operator">matches</span>
@@ -284,6 +352,11 @@ export function SourceForm({
                         </button>
                       )}
                     </div>
+                    {errors[`group-${gi}-duplicate`] && (
+                      <span className="field-error" style={{ marginTop: '6px', display: 'block' }}>
+                        {errors[`group-${gi}-duplicate`]}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -314,6 +387,78 @@ export function SourceForm({
               Lower priority = evaluated first. Use 0 for specific rules, 100 for catch-all rules.
             </span>
             {errors.priority && <span className="field-error">{errors.priority}</span>}
+          </div>
+
+          {/* Parse Profile */}
+          <div className="form-group">
+            <label htmlFor="source-parse-profile">Parse Profile</label>
+            <select
+              id="source-parse-profile"
+              value={parseProfile}
+              onChange={(e) => setParseProfile(e.target.value)}
+              className="form-input"
+              disabled={profilesLoading}
+            >
+              <option value="">None (generic parsing)</option>
+              {Object.entries(groupedProfiles)
+                .sort(([a], [b]) =>
+                  profileCategoryLabel(a as ParseProfileSummary['category'])
+                    .localeCompare(profileCategoryLabel(b as ParseProfileSummary['category'])),
+                )
+                .map(([category, items]) => (
+                <optgroup key={category} label={profileCategoryLabel(category as ParseProfileSummary['category'])}>
+                  {items
+                    .slice()
+                    .sort((a, b) => a.label.localeCompare(b.label))
+                    .map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <span className="field-hint">
+              {profilesLoading
+                ? 'Loading parse profiles...'
+                : selectedProfile
+                  ? selectedProfile.description
+                  : 'Use generic parsing (backward-compatible default).'}
+            </span>
+            {selectedProfile && (
+              <div
+                style={{
+                  marginTop: '8px',
+                  padding: '10px 12px',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  background: 'var(--bg-tertiary)',
+                }}
+              >
+                <div style={{ fontSize: '0.82rem', marginBottom: '6px' }}>
+                  <strong>Under the hood</strong>
+                </div>
+                <ul style={{ margin: '0 0 8px 18px', padding: 0, fontSize: '0.82rem' }}>
+                  {selectedProfile.under_the_hood.map((line, idx) => (
+                    <li key={`uth-${idx}`}>{line}</li>
+                  ))}
+                </ul>
+                <div style={{ fontSize: '0.82rem', marginBottom: '6px' }}>
+                  <strong>What changes in result</strong>
+                </div>
+                <ul style={{ margin: '0 0 8px 18px', padding: 0, fontSize: '0.82rem' }}>
+                  {selectedProfile.result_changes.map((line, idx) => (
+                    <li key={`chg-${idx}`}>{line}</li>
+                  ))}
+                </ul>
+                <span className="field-hint" style={{ display: 'block' }}>
+                  Multiline mode: <code>{selectedProfile.multiline_mode}</code>
+                  {selectedProfile.extracted_fields.length > 0 && (
+                    <> | Extracted fields: <code>{selectedProfile.extracted_fields.join(', ')}</code></>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="modal-actions">
