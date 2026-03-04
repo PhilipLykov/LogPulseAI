@@ -297,7 +297,37 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         });
       }
 
-      // Query recent events: compare event timestamp vs received_at.
+      // Step 1: aggregate check over the full 24h window (no LIMIT).
+      // A LIMIT on the sample query could hide the true span when event
+      // volume is high, so we compute count and span separately.
+      const stats = await db('events')
+        .where({ system_id: id })
+        .whereRaw(`received_at > now() - interval '24 hours'`)
+        .whereRaw(`abs(extract(epoch from ("timestamp" - received_at))) < 86400`)
+        .select(
+          db.raw(`count(*)::int as event_count`),
+          db.raw(`extract(epoch from (max(received_at) - min(received_at))) / 3600.0 as span_hours`),
+        )
+        .first();
+
+      const eventCount = stats?.event_count ?? 0;
+      const spanHours = Number(stats?.span_hours ?? 0);
+
+      if (eventCount < 20) {
+        return reply.send({
+          detected: false,
+          reason: `Not enough recent events (${eventCount}/20 required). Need at least 20 events in the last 24 hours.`,
+        });
+      }
+
+      if (spanHours < 3) {
+        return reply.send({
+          detected: false,
+          reason: `Events span only ${spanHours.toFixed(1)} hours (3 hours minimum). Wait for more events to arrive.`,
+        });
+      }
+
+      // Step 2: fetch a sample of drift values for the actual TZ calculation.
       // received_at is set by the DB (server time, UTC) when the row is inserted.
       // If no TZ correction is configured, timestamp drifts from received_at
       // by exactly the source's UTC offset.
@@ -308,27 +338,8 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         .orderBy('received_at', 'desc')
         .select(
           db.raw(`extract(epoch from ("timestamp" - received_at)) as drift_seconds`),
-          db.raw(`received_at`),
         )
         .limit(500);
-
-      if (rows.length < 20) {
-        return reply.send({
-          detected: false,
-          reason: `Not enough recent events (${rows.length}/20 required). Need at least 20 events in the last 24 hours.`,
-        });
-      }
-
-      // Check time span: events must span at least 3 hours of received_at
-      const receivedTimes = rows.map((r: any) => new Date(r.received_at).getTime());
-      const spanMs = Math.max(...receivedTimes) - Math.min(...receivedTimes);
-      const spanHours = spanMs / (3600 * 1000);
-      if (spanHours < 3) {
-        return reply.send({
-          detected: false,
-          reason: `Events span only ${spanHours.toFixed(1)} hours (3 hours minimum). Wait for more events to arrive.`,
-        });
-      }
 
       // Compute drifts and find median
       const drifts = rows
