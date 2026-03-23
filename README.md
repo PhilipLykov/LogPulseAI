@@ -1,8 +1,8 @@
-# LogSentinel AI
+# LogPulse AI
 
 **AI-Powered Log Intelligence and SIEM Platform with MITRE ATT&CK Mapping**
 
-LogSentinel AI transforms raw log streams into actionable security and operational intelligence. It continuously collects, normalizes, and stores log events from any source, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — with optional MITRE ATT&CK technique identification and confidence scoring — all through an intuitive real-time dashboard.
+LogPulse AI transforms raw log streams into actionable security and operational intelligence. It continuously collects, normalizes, and stores log events from any source, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — with optional MITRE ATT&CK technique identification and confidence scoring — all through an intuitive real-time dashboard.
 
 ---
 
@@ -35,7 +35,7 @@ Configurable PII masking with 11 built-in categories, custom regex patterns, fie
 
 ---
 
-## Why LogSentinel AI?
+## Why LogPulse AI?
 
 ### AI-Powered Analysis
 
@@ -166,8 +166,8 @@ You only need Docker. AI model and API key are configured via the web UI after f
 Everything runs inside Docker — no external database needed.
 
 ```bash
-git clone https://github.com/PhilipLykov/LogSentinelAI.git
-cd LogSentinelAI/docker
+git clone https://github.com/PhilipLykov/LogPulseAI.git
+cd LogPulseAI/docker
 cp .env.example .env
 # Edit .env: set DB_PASSWORD (pick any strong password) and DB_HOST=postgres
 docker compose --profile db up -d --build
@@ -178,8 +178,8 @@ docker compose --profile db up -d --build
 Use your existing PostgreSQL server. Only the backend and dashboard run in Docker.
 
 ```bash
-git clone https://github.com/PhilipLykov/LogSentinelAI.git
-cd LogSentinelAI/docker
+git clone https://github.com/PhilipLykov/LogPulseAI.git
+cd LogPulseAI/docker
 cp .env.example .env
 # Edit .env: set DB_HOST=<your-pg-server-ip> and DB_PASSWORD
 docker compose up -d --build
@@ -242,7 +242,7 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 
 ## LLM Cost Optimization
 
-One of the most common concerns when deploying AI-powered log analysis is LLM API cost. LogSentinel AI implements **16 independent optimization techniques** that work together to reduce token usage by up to 80-95% compared to naive per-event analysis — without sacrificing detection quality. All optimizations are **configurable through the web UI** and come with sensible defaults that work out of the box.
+One of the most common concerns when deploying AI-powered log analysis is LLM API cost. LogPulse AI implements **16 independent optimization techniques** that work together to reduce token usage by up to 80-95% compared to naive per-event analysis — without sacrificing detection quality. All optimizations are **configurable through the web UI** and come with sensible defaults that work out of the box.
 
 ### How It Works
 
@@ -301,7 +301,7 @@ One of the most common concerns when deploying AI-powered log analysis is LLM AP
 
 ### Cost Tracking
 
-LogSentinel AI tracks every LLM API call with:
+LogPulse AI tracks every LLM API call with:
 - **Per-request metrics**: model used, input/output tokens, estimated cost (USD)
 - **Per-system breakdown**: see which monitored systems consume the most tokens
 - **Daily usage charts**: visualize spending trends over time

@@ -22,7 +22,7 @@ function envIntervalMs(value: string | undefined, fallback: number): number {
 }
 
 async function main(): Promise<void> {
-  console.log(`[${localTimestamp()}] Starting LogSentinel AI backend…`);
+  console.log(`[${localTimestamp()}] Starting LogPulse AI backend…`);
 
   // 1. Initialize database (run migrations + seeds)
   await initDb();

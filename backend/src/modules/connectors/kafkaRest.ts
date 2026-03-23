@@ -39,7 +39,7 @@ export class KafkaRestConnector implements ConnectorAdapter {
     validateUrl(url);
 
     const baseUrl = trimTrailingSlashes(url);
-    const group = sanitizeGroupName(asNonEmptyString(config.consumer_group) ?? `logsentinel-${topic}`);
+    const group = sanitizeGroupName(asNonEmptyString(config.consumer_group) ?? `logpulse-${topic}`);
     const format = (asNonEmptyString(config.format) ?? 'json').toLowerCase() === 'binary' ? 'binary' : 'json';
     const fetchTimeoutMs = clampInt(config.fetch_timeout_ms, 100, 30000, 3000);
     const maxBytes = clampInt(config.max_bytes, 1024, 5_000_000, 300000);
@@ -301,7 +301,7 @@ function buildKafkaHeaders(config: Record<string, unknown>): Record<string, stri
 
 function sanitizeGroupName(group: string): string {
   const cleaned = group.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
-  return cleaned.length > 0 ? cleaned : 'logsentinel-default';
+  return cleaned.length > 0 ? cleaned : 'logpulse-default';
 }
 
 function asNonEmptyString(v: unknown): string | undefined {

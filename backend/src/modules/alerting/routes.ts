@@ -154,7 +154,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
         }
       }
       const payload: AlertPayload = {
-        title: 'Test Notification — LogSentinel AI',
+        title: 'Test Notification — LogPulse AI',
         body: `This is a test notification sent at ${localTimestamp()}. If you see this message, the notification channel "${channel.name}" is configured correctly and working.`,
         severity: 'medium',
         variant: 'firing',

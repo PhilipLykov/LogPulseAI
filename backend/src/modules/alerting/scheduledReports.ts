@@ -133,7 +133,7 @@ function buildReportPayload(
     body,
     severity: 'info',
     variant: 'firing',
-    system_name: 'LogSentinel AI',
+    system_name: 'LogPulse AI',
     criterion: 'Compliance / Audit',
   };
 }

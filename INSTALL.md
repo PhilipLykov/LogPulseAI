@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide walks you through installing LogSentinel AI from start to finish. Choose the deployment method that fits your environment.
+This guide walks you through installing LogPulse AI from start to finish. Choose the deployment method that fits your environment.
 
 ---
 
@@ -37,8 +37,8 @@ Get up and running in under 5 minutes.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/PhilipLykov/LogSentinelAI.git
-cd LogSentinelAI/docker
+git clone https://github.com/PhilipLykov/LogPulseAI.git
+cd LogPulseAI/docker
 
 # 2. Create your configuration
 cp .env.example .env
@@ -150,7 +150,7 @@ cp .env.example .env
 |----------|----------|---------|-------------|
 | `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (use `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | Database password (pick any strong password) |
-| `DB_NAME` | No | `logsentinel_ai` | Database name |
+| `DB_NAME` | No | `logpulse_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by the browser |
@@ -166,7 +166,7 @@ cp .env.example .env
 
 ### Elasticsearch Integration (Optional)
 
-LogSentinel AI can read events directly from an existing Elasticsearch cluster. This is a **hybrid** model: events stay in Elasticsearch (read-only), while AI analysis results, acknowledgments, and metadata are stored in PostgreSQL.
+LogPulse AI can read events directly from an existing Elasticsearch cluster. This is a **hybrid** model: events stay in Elasticsearch (read-only), while AI analysis results, acknowledgments, and metadata are stored in PostgreSQL.
 
 **Setup Steps:**
 
@@ -182,13 +182,13 @@ LogSentinel AI can read events directly from an existing Elasticsearch cluster. 
 **Supported ES Versions:** Elasticsearch 7.x, 8.x, and OpenSearch 2.x.
 
 **Important Notes:**
-- LogSentinel AI **never writes to or deletes from** your Elasticsearch cluster. It is read-only.
+- LogPulse AI **never writes to or deletes from** your Elasticsearch cluster. It is read-only.
 - PostgreSQL is still required for AI analysis results, user data, audit log, and ES event metadata (acknowledgments, template IDs).
 - ECS (Elastic Common Schema) fields are automatically flattened for compatibility with the ingest API.
 
 ### Log Collector — Syslog & OpenTelemetry (Optional)
 
-LogSentinel AI includes a built-in **Fluent Bit** log collector that receives logs from network sources and forwards them to the ingest API.
+LogPulse AI includes a built-in **Fluent Bit** log collector that receives logs from network sources and forwards them to the ingest API.
 
 **Enable with:** `docker compose --profile collector up -d`
 
@@ -215,9 +215,9 @@ docker compose --profile collector up -d
 
 **Syslog (rsyslog example):**
 
-Add to `/etc/rsyslog.d/60-logsentinel.conf`:
+Add to `/etc/rsyslog.d/60-logpulse.conf`:
 ```
-# Forward all logs to LogSentinel AI collector via TCP
+# Forward all logs to LogPulse AI collector via TCP
 action(type="omfwd" Target="<your-server-ip>" Port="5140" Protocol="tcp")
 ```
 
@@ -263,7 +263,7 @@ curl http://localhost:2020/api/v1/metrics/prometheus
 
 - The collector runs with **`network_mode: host`** so that Fluent Bit sees the real source IP addresses of syslog senders. Without this, Docker NATs UDP packets and all sources appear to come from the Docker bridge gateway (e.g., `172.17.0.1`), which breaks source-IP-based routing to monitored systems. Because of host networking, Docker DNS (service names like `backend`) is unavailable — use `INGEST_HOST=127.0.0.1` to reach the backend on the same machine, or set it to the backend's external IP if running on a different host. Explicit port mappings are not needed (ports are directly on the host).
 - Port **5140** is used instead of 514 to avoid requiring root/privileged mode. You can change this in `.env` or configure your syslog sources to send to 5140.
-- The OpenTelemetry input accepts **logs, metrics, and traces**. Currently, LogSentinel AI processes logs; metrics and traces are forwarded but may not be fully analyzed.
+- The OpenTelemetry input accepts **logs, metrics, and traces**. Currently, LogPulse AI processes logs; metrics and traces are forwarded but may not be fully analyzed.
 - ECS (Elastic Common Schema) fields from OTel/Beats agents are automatically flattened by the ingest API (e.g., `host.name` → `host`, `source.ip` → `source_ip`).
 - **Docker container logs** are collected by tailing `/var/lib/docker/containers/*/*.log` (mounted read-only). This requires the Docker daemon to use the **`json-file`** log driver (the default). If your Docker daemon is configured to use the `syslog` driver, change it in `/etc/docker/daemon.json`:
   ```json
@@ -276,7 +276,7 @@ curl http://localhost:2020/api/v1/metrics/prometheus
   }
   ```
   Then restart Docker: `sudo systemctl restart docker`. Container names are resolved automatically from Docker metadata, and events are routed with `source_ip=127.0.0.1` (matching a "Docker Host" system selector). Fluent Bit's own logs are automatically excluded to prevent feedback loops.
-- You can also run Fluent Bit **outside Docker** and point its HTTP output at your LogSentinel AI backend's ingest API.
+- You can also run Fluent Bit **outside Docker** and point its HTTP output at your LogPulse AI backend's ingest API.
 
 ### Managing the Stack
 
@@ -307,7 +307,7 @@ By default (without `--profile db`), the bundled PostgreSQL does **not** start. 
 ```bash
 DB_HOST=192.168.1.100
 DB_PORT=5432
-DB_NAME=logsentinel_ai
+DB_NAME=logpulse_ai
 DB_USER=syslog_ai
 DB_PASSWORD=your_password
 ```
@@ -321,10 +321,10 @@ docker compose up -d --build
 Ensure the external database exists and the user has `CREATE` permission on the `public` schema:
 
 ```sql
-CREATE DATABASE logsentinel_ai;
+CREATE DATABASE logpulse_ai;
 CREATE USER syslog_ai WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE logsentinel_ai TO syslog_ai;
-\c logsentinel_ai
+GRANT ALL PRIVILEGES ON DATABASE logpulse_ai TO syslog_ai;
+\c logpulse_ai
 GRANT CREATE ON SCHEMA public TO syslog_ai;
 ```
 
@@ -343,8 +343,8 @@ Use this method if you prefer to run Node.js directly on your server.
 ### Step 1: Clone and install dependencies
 
 ```bash
-git clone https://github.com/PhilipLykov/LogSentinelAI.git
-cd LogSentinelAI
+git clone https://github.com/PhilipLykov/LogPulseAI.git
+cd LogPulseAI
 
 cd backend && npm install
 cd ../dashboard && npm install
@@ -354,10 +354,10 @@ cd ..
 ### Step 2: Create the PostgreSQL database
 
 ```sql
-CREATE DATABASE logsentinel_ai;
+CREATE DATABASE logpulse_ai;
 CREATE USER syslog_ai WITH PASSWORD 'your_strong_password_here';
-GRANT ALL PRIVILEGES ON DATABASE logsentinel_ai TO syslog_ai;
-\c logsentinel_ai
+GRANT ALL PRIVILEGES ON DATABASE logpulse_ai TO syslog_ai;
+\c logpulse_ai
 GRANT CREATE ON SCHEMA public TO syslog_ai;
 ```
 
@@ -405,7 +405,7 @@ Serve the `dashboard/dist/` folder with any web server. Example with nginx:
 ```nginx
 server {
     listen 8070;
-    root /path/to/LogSentinelAI/dashboard/dist;
+    root /path/to/LogPulseAI/dashboard/dist;
     index index.html;
 
     location / {
@@ -549,7 +549,7 @@ Create `/opt/syslog-forwarder/syslog-forwarder.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Forward JSON syslog lines to LogSentinel AI ingest API."""
+"""Forward JSON syslog lines to LogPulse AI ingest API."""
 
 import json, time, os, sys, urllib.request, urllib.error
 from datetime import datetime
@@ -625,7 +625,7 @@ Create `/etc/systemd/system/syslog-forwarder.service`:
 
 ```ini
 [Unit]
-Description=Syslog Forwarder to LogSentinel AI
+Description=Syslog Forwarder to LogPulse AI
 After=network.target rsyslog.service
 
 [Service]
@@ -662,7 +662,7 @@ The ingest API accepts three JSON formats:
 
 ### Fluent Bit
 
-> **Tip:** LogSentinel AI includes a built-in Fluent Bit log collector (see [Log Collector](#log-collector--syslog--opentelemetry-optional) above). If you prefer to run your own Fluent Bit instance, use the output config below:
+> **Tip:** LogPulse AI includes a built-in Fluent Bit log collector (see [Log Collector](#log-collector--syslog--opentelemetry-optional) above). If you prefer to run your own Fluent Bit instance, use the output config below:
 
 ```ini
 [OUTPUT]
@@ -720,7 +720,7 @@ Unknown fields are preserved in a `raw` JSON column.
 
 ### OpenTelemetry Integration
 
-LogSentinel AI supports OpenTelemetry log ingestion in two ways:
+LogPulse AI supports OpenTelemetry log ingestion in two ways:
 
 #### Option A: Built-in Collector (recommended)
 
@@ -753,7 +753,7 @@ service:
 
 OTel agents that support HTTP output can send directly to the ingest API. ECS (Elastic Common Schema) fields are automatically flattened:
 
-| OTel / ECS Field | LogSentinel AI Field |
+| OTel / ECS Field | LogPulse AI Field |
 |------------------|---------------------|
 | `host.name` | `host` |
 | `source.ip` | `source_ip` |
@@ -841,7 +841,7 @@ Go to **Settings > Database > Backup Configuration**:
 ### Docker
 
 ```bash
-cd LogSentinelAI
+cd LogPulseAI
 git pull
 cd docker
 docker compose up -d --build
@@ -852,7 +852,7 @@ Database migrations run automatically — no manual steps needed.
 ### Standalone
 
 ```bash
-cd LogSentinelAI
+cd LogPulseAI
 git pull
 
 cd backend
@@ -893,11 +893,11 @@ If you forgot the admin password, reset by deleting users from the database:
 
 ```bash
 # If using bundled PostgreSQL (--profile db):
-docker compose exec postgres psql -U syslog_ai -d logsentinel_ai \
+docker compose exec postgres psql -U syslog_ai -d logpulse_ai \
   -c "DELETE FROM sessions; DELETE FROM users;"
 
 # If using external PostgreSQL:
-psql -h your-pg-host -U syslog_ai -d logsentinel_ai \
+psql -h your-pg-host -U syslog_ai -d logpulse_ai \
   -c "DELETE FROM sessions; DELETE FROM users;"
 
 # Then restart backend and check logs for new credentials:
@@ -937,7 +937,7 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 |----------|----------|---------|-------------|
 | `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (set to `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | PostgreSQL password |
-| `DB_NAME` | No | `logsentinel_ai` | Database name |
+| `DB_NAME` | No | `logpulse_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `OPENAI_API_KEY` | No | — | LLM API key fallback (prefer Settings > AI Model in UI) |
