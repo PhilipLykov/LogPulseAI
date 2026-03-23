@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LogPulse AI — AI-Powered Open-Source SIEM</title>
+  <meta name="description" content="Open-source AI-powered SIEM platform with privacy-first PII filtering, 6-criteria LLM scoring, MITRE ATT&CK mapping, and 5-minute Docker deployment. Free forever.">
+  <meta name="keywords" content="SIEM, open source, AI, log analysis, LLM, MITRE ATT&CK, self-hosted, privacy, PII filtering, threat detection, log management">
+  <meta property="og:title" content="LogPulse AI — AI-Powered Open-Source SIEM">
+  <meta property="og:description" content="Turn raw logs into security intelligence with AI. Privacy-first PII filtering, $2/month LLM costs, 5-minute Docker deploy.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://philiplykov.github.io/LogPulseAI/">
+  <meta property="og:image" content="https://raw.githubusercontent.com/PhilipLykov/LogPulseAI/master/docs/screenshots/dashboard.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0e1a;
+      --bg-card: #111827;
+      --bg-card-hover: #1a2235;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      --green: #22c55e;
+      --orange: #f59e0b;
+      --red: #ef4444;
+      --border: #1e293b;
+      --max-w: 1100px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10, 14, 26, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    .nav-inner {
+      max-width: var(--max-w); margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 56px;
+    }
+    .nav-brand { font-weight: 800; font-size: 1.15rem; letter-spacing: -0.02em; }
+    .nav-brand span { color: var(--accent); }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a { color: var(--text-muted); font-size: 0.9rem; font-weight: 500; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* ── HERO ── */
+    .hero {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 80px 24px 48px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-block;
+      background: var(--accent-glow); color: var(--accent);
+      font-size: 0.8rem; font-weight: 600;
+      padding: 4px 14px; border-radius: 20px;
+      margin-bottom: 20px; letter-spacing: 0.03em;
+    }
+    .hero h1 {
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 800; letter-spacing: -0.03em;
+      line-height: 1.15; margin-bottom: 20px;
+    }
+    .hero h1 em { font-style: normal; color: var(--accent); }
+    .hero p {
+      font-size: 1.15rem; color: var(--text-muted);
+      max-width: 640px; margin: 0 auto 32px;
+    }
+    .hero-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 28px; border-radius: 8px;
+      font-size: 0.95rem; font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #4f46e5; text-decoration: none; }
+    .btn-outline {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-outline:hover { background: var(--bg-card); text-decoration: none; }
+
+    /* ── SCREENSHOT ── */
+    .screenshot {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 24px 64px;
+    }
+    .screenshot img {
+      width: 100%; border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+    }
+
+    /* ── STATS ── */
+    .stats {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 24px 64px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px; text-align: center;
+    }
+    .stat {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 28px 16px;
+    }
+    .stat-value { font-size: 1.8rem; font-weight: 800; color: var(--accent); }
+    .stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── FEATURES ── */
+    .features {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+    .features h2 {
+      text-align: center; font-size: 2rem; font-weight: 800;
+      letter-spacing: -0.02em; margin-bottom: 48px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 28px;
+      transition: background 0.2s;
+    }
+    .feature-card:hover { background: var(--bg-card-hover); }
+    .feature-icon { font-size: 1.6rem; margin-bottom: 12px; }
+    .feature-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; }
+    .feature-card p { font-size: 0.9rem; color: var(--text-muted); line-height: 1.55; }
+
+    /* ── DIFFERENTIATORS ── */
+    .diff {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+    .diff h2 {
+      text-align: center; font-size: 2rem; font-weight: 800;
+      letter-spacing: -0.02em; margin-bottom: 48px;
+    }
+    .diff-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .diff-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 28px;
+      display: flex; gap: 16px;
+    }
+    .diff-num {
+      flex-shrink: 0; width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--accent-glow); color: var(--accent);
+      border-radius: 8px; font-weight: 800; font-size: 0.9rem;
+    }
+    .diff-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+    .diff-card p { font-size: 0.85rem; color: var(--text-muted); }
+
+    /* ── QUICKSTART ── */
+    .quickstart {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+    .quickstart h2 {
+      text-align: center; font-size: 2rem; font-weight: 800;
+      letter-spacing: -0.02em; margin-bottom: 48px;
+    }
+    .code-block {
+      background: #0d1117; border: 1px solid var(--border);
+      border-radius: 10px; padding: 24px 28px;
+      overflow-x: auto; font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.88rem; line-height: 1.7;
+      max-width: 700px; margin: 0 auto;
+    }
+    .code-block .comment { color: #6a737d; }
+    .code-block .cmd { color: #e2e8f0; }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
+      color: var(--text-muted); font-size: 0.85rem;
+    }
+    footer a { color: var(--text-muted); }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 640px) {
+      .hero { padding: 48px 16px 32px; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .features-grid, .diff-grid { grid-template-columns: 1fr; }
+      .nav-links { gap: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <div class="nav-brand">Log<span>Pulse</span> AI</div>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="https://github.com/PhilipLykov/LogPulseAI" target="_blank">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-badge">Open Source &middot; MIT License &middot; Free Forever</div>
+  <h1>Turn raw logs into <em>security intelligence</em> with AI</h1>
+  <p>
+    Self-hosted SIEM platform that scores every event across 6 security criteria using LLMs,
+    maps threats to MITRE ATT&amp;CK, and filters all PII <strong>before</strong> it reaches the AI.
+    Deploy in 5 minutes. Run for $2/month.
+  </p>
+  <div class="hero-buttons">
+    <a href="https://github.com/PhilipLykov/LogPulseAI" class="btn btn-primary" target="_blank">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
+      Get Started on GitHub
+    </a>
+    <a href="#quickstart" class="btn btn-outline">Quick Start Guide</a>
+  </div>
+</section>
+
+<section class="screenshot">
+  <img src="screenshots/dashboard.png" alt="LogPulse AI Dashboard — real-time 6-criteria AI score bars for all monitored systems" loading="lazy">
+</section>
+
+<section class="stats">
+  <div class="stat">
+    <div class="stat-value">6</div>
+    <div class="stat-label">AI Scoring Criteria</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">$2-10</div>
+    <div class="stat-label">Monthly LLM Cost</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">5 min</div>
+    <div class="stat-label">Docker Deploy</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">11+</div>
+    <div class="stat-label">PII Masking Categories</div>
+  </div>
+</section>
+
+<section class="features" id="features">
+  <h2>What it does</h2>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">&#128737;</div>
+      <h3>Privacy-First AI</h3>
+      <p>PII is filtered <strong>before</strong> any data reaches the LLM. 11 built-in masking categories (IPs, emails, credentials, etc.), custom regex patterns, and full field stripping. Verify with a live test filter.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#129302;</div>
+      <h3>6-Criteria AI Scoring</h3>
+      <p>Every event is evaluated by an LLM across IT Security, Performance, Failure Prediction, Anomaly Detection, Compliance, and Operational Risk. Each criterion uses a dedicated, tunable prompt.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#127919;</div>
+      <h3>MITRE ATT&amp;CK Mapping</h3>
+      <p>AI findings carry optional technique IDs and confidence scores, mapped to the MITRE ATT&amp;CK framework. Go from raw log to threat classification automatically.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128269;</div>
+      <h3>Meta-Analysis &amp; Findings</h3>
+      <p>Sliding-window pipeline aggregates scores into structured findings with deduplication (TF-IDF + Jaccard + LLM), severity decay, and auto-resolution when issues stop recurring.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128172;</div>
+      <h3>RAG "Ask AI"</h3>
+      <p>Natural language queries over your entire event history. Ask "Were there failed SSH logins last night?" or "Summarize Docker issues from the past week." Persistent chat history.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128176;</div>
+      <h3>16 Cost Optimizations</h3>
+      <p>Template deduplication, score caching, severity pre-filtering, batch sizing, and 12 more techniques reduce LLM costs by 80-95%. Real-time usage tracking per model and system.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128274;</div>
+      <h3>Enterprise Security</h3>
+      <p>RBAC with 20 permissions, immutable audit log (PostgreSQL trigger), bcrypt auth, session hashing, API key scopes with IP allowlists, OWASP Top 10 compliant.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128268;</div>
+      <h3>Any LLM Provider</h3>
+      <p>Works with OpenAI, Azure, Ollama, LM Studio, vLLM — any OpenAI-compatible API. Swap models from the UI without redeployment. Self-host for air-gapped environments.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128640;</div>
+      <h3>Universal Ingestion</h3>
+      <p>Syslog (UDP/TCP), OpenTelemetry, Fluent Bit, Vector, Logstash, Beats. Pull connectors for Elasticsearch, Loki, VictoriaLogs, Kafka, RabbitMQ. Auto-discovery of new sources.</p>
+    </div>
+  </div>
+</section>
+
+<section class="diff">
+  <h2>Why LogPulse AI over alternatives?</h2>
+  <div class="diff-grid">
+    <div class="diff-card">
+      <div class="diff-num">1</div>
+      <div>
+        <h3>vs. Wazuh</h3>
+        <p>No multi-hour setup. No YAML editing. Docker up in 5 minutes with full GUI configuration. Plus LLM-powered analysis that Wazuh doesn't have.</p>
+      </div>
+    </div>
+    <div class="diff-card">
+      <div class="diff-num">2</div>
+      <div>
+        <h3>vs. Graylog</h3>
+        <p>No feature-gated enterprise tier. Everything is free and open-source under MIT. AI analysis included, not an expensive add-on.</p>
+      </div>
+    </div>
+    <div class="diff-card">
+      <div class="diff-num">3</div>
+      <div>
+        <h3>vs. ELK Stack</h3>
+        <p>Built-in AI scoring and findings pipeline. No need to build detection rules, dashboards, or alerting from scratch. Connect Elasticsearch as a hybrid data source.</p>
+      </div>
+    </div>
+    <div class="diff-card">
+      <div class="diff-num">4</div>
+      <div>
+        <h3>vs. Splunk</h3>
+        <p>Self-hosted, no per-GB pricing, no vendor lock-in. AI analysis runs on any LLM provider you choose — including your own hardware.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="quickstart" id="quickstart">
+  <h2>Get running in 5 minutes</h2>
+  <div class="code-block">
+    <span class="comment"># Clone and configure</span><br>
+    <span class="cmd">git clone https://github.com/PhilipLykov/LogPulseAI.git</span><br>
+    <span class="cmd">cd LogPulseAI/docker</span><br>
+    <span class="cmd">cp .env.example .env</span><br>
+    <span class="comment"># Edit .env: set DB_PASSWORD and DB_HOST=postgres</span><br>
+    <br>
+    <span class="comment"># Start everything (including PostgreSQL)</span><br>
+    <span class="cmd">docker compose --profile db up -d --build</span><br>
+    <br>
+    <span class="comment"># Get your login credentials</span><br>
+    <span class="cmd">docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"</span><br>
+    <br>
+    <span class="comment"># Open http://localhost:8070 and configure your LLM in Settings</span>
+  </div>
+</section>
+
+<footer>
+  <p>
+    LogPulse AI is open-source software under the
+    <a href="https://github.com/PhilipLykov/LogPulseAI/blob/master/LICENSE" target="_blank">MIT License</a>.
+    Built by <a href="https://github.com/PhilipLykov" target="_blank">Philip Lykov</a>.
+  </p>
+</footer>
+
+</body>
+</html>
