@@ -1,6 +1,6 @@
 {
   "name": "logpulse-ai-backend",
-  "version": "0.8.10-beta",
+  "version": "0.9.0-beta",
   "description": "AI Log Audit and Analysis Solution - Backend",
   "private": true,
   "type": "module",

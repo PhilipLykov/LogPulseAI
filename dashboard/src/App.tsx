@@ -161,7 +161,7 @@ export default function App() {
         <div className="header-left">
           <h1>
             <span>Log</span>Pulse AI
-            <span className="version-tag">v0.8.10-beta</span>
+            <span className="version-tag">v0.9.0-beta</span>
           </h1>
           <nav className="header-nav" role="tablist" aria-label="Main navigation">
             <button
