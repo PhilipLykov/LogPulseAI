@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────
---  LogSentinel AI — Docker Container Log Enrichment (Fluent Bit Lua)
+--  LogPulse AI — Docker Container Log Enrichment (Fluent Bit Lua)
 -- ─────────────────────────────────────────────────────────────────────
 --
 --  This script runs as a Fluent Bit Lua filter on records tagged
