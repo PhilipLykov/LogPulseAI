@@ -356,13 +356,16 @@
 <section class="quickstart" id="quickstart">
   <h2>Get running in 5 minutes</h2>
   <div class="code-block">
-    <span class="comment"># Clone and configure</span><br>
+    <span class="comment"># Clone the repo</span><br>
     <span class="cmd">git clone https://github.com/PhilipLykov/LogPulseAI.git</span><br>
     <span class="cmd">cd LogPulseAI/docker</span><br>
-    <span class="cmd">cp .env.example .env</span><br>
-    <span class="comment"># Edit .env: set DB_PASSWORD and DB_HOST=postgres</span><br>
     <br>
-    <span class="comment"># Start everything (including PostgreSQL)</span><br>
+    <span class="comment"># Configure: set a DB password and point to the bundled PostgreSQL</span><br>
+    <span class="cmd">cp .env.example .env</span><br>
+    <span class="cmd">sed -i 's/DB_HOST=localhost/DB_HOST=postgres/' .env</span><br>
+    <span class="cmd">sed -i 's/CHANGE_ME_STRONG_PASSWORD/YourStr0ngP@ss!/' .env</span><br>
+    <br>
+    <span class="comment"># Start everything (backend + dashboard + PostgreSQL)</span><br>
     <span class="cmd">docker compose --profile db up -d --build</span><br>
     <br>
     <span class="comment"># Get your login credentials</span><br>
