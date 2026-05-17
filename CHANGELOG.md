@@ -5,6 +5,14 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1-beta] - 2026-05-17
+
+### Security
+- **Dependency Security Audit**: Resolved 14 known vulnerabilities (9 high, 5 moderate) across backend and dashboard dependencies via non-breaking semver-compatible upgrades
+  - **Backend (6 fixed)**: `fastify` (Body Schema Validation Bypass GHSA-247c-9743-5963, Content-Type validation GHSA-573f-x89g-hqp9, X-Forwarded-Proto/Host spoofing GHSA-444r-cwp2-x5xf), `undici` (HTTP Request/Response Smuggling GHSA-2mjp-6q6p-2qxm, WebSocket parser overflow GHSA-f269-vfmq-vjvj, CRLF Injection GHSA-4992-7rv2-5pvq, plus 3 DoS vectors), `lodash` (Code Injection via `_.template` GHSA-r5fr-rjxr-66jc, Prototype Pollution GHSA-f23m-r3pf-42rh), `fast-uri` (Path Traversal GHSA-q3j6-qgpj-74h6, Host confusion GHSA-v39h-62p7-jpjc), `ajv` (ReDoS GHSA-2g4f-4pwh-qvx6), `uuid` (Buffer bounds check GHSA-w5hq-g745-h8pq)
+  - **Dashboard (8 fixed)**: `vite` (Path Traversal GHSA-4w7w-66w2-5vf9, `server.fs.deny` bypass GHSA-v2wj-q39q-566r, Arbitrary File Read via WebSocket GHSA-p9ff-h696-f583), `rollup` (Path Traversal GHSA-mw96-cpmx-2vgc), `postcss` (XSS via Unescaped `</style>` GHSA-qx2v-qp2m-jg93), `picomatch` (Method Injection GHSA-3v7f-55p6-f55p, ReDoS GHSA-c2c7-rcm5-vvqj), `minimatch` (3 ReDoS variants), `flatted` (DoS GHSA-25h7-pfq9-p65f, Prototype Pollution GHSA-rf6f-7fwh-wjgh), `brace-expansion` (DoS GHSA-f886-m6hf-6m8v), `ajv` (ReDoS GHSA-2g4f-4pwh-qvx6)
+- Both backend and dashboard now report 0 known vulnerabilities under `npm audit`
+
 ## [0.9.0-beta] - 2026-03-03
 
 ### Added
