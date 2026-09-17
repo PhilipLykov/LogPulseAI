@@ -772,9 +772,9 @@ Go to **Settings > AI Model** after login.
 
 | Setting | Description | Recommended |
 |---------|-------------|-------------|
-| **Model** | LLM model name | `gpt-4o-mini` (cost), `gpt-4o` (quality) |
+| **Model** | LLM model name | `gpt-4o-mini` (cost), `gpt-5-mini` / `o3-mini` (reasoning) |
+| **Reasoning level** | How hard GPT-5 / o-series models think (`auto` … `max`) | `auto` (provider default); `low` for cheaper scoring |
 | **API Base URL** | For non-OpenAI (Ollama, LM Studio, Azure) | — |
-| **Temperature** | Randomness (0.0-1.0) | 0.1-0.3 |
 | **System Prompts** | Scoring, meta-analysis, RAG prompts | Edit to match your domain |
 | **Per-Criterion Prompts** | Individual instructions for each of the 6 criteria | Fine-tune for your environment |
 | **Token Optimization** | Caching, filtering, truncation, batch size | Enable all for cost savings |
@@ -921,6 +921,7 @@ docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 
 - Settings > AI Model > Token Optimization: enable caching, severity filtering, batch sizing
 - Switch to `gpt-4o-mini` if using a more expensive model
+- On GPT-5 / o-series models, set **Reasoning level** to `low` or `minimal` for cheaper scoring (Settings > AI Model)
 
 ### AI analysis stopped after the provider balance ran out
 
@@ -947,6 +948,8 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `OPENAI_API_KEY` | No | — | LLM API key fallback (prefer Settings > AI Model in UI) |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model fallback (prefer Settings > AI Model) |
+| `OPENAI_REASONING_EFFORT` | No | `auto` | Reasoning level fallback (`auto`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
 | `PORT` | No | `3000` | Backend listen port |
 | `HOST` | No | `0.0.0.0` | Backend bind address |
 | `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |

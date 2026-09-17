@@ -5,6 +5,11 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3-beta] - 2026-09-17
+
+### Added
+- **Configurable LLM reasoning level**: Settings → AI Model now includes a reasoning-level control (`auto`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The value is sent as OpenAI `reasoning_effort` on GPT-5, GPT-6, and o-series models. Chat models such as `gpt-4o-mini` store the setting but do not send it, so they cannot fail on an unknown parameter. If a model rejects a specific effort value, the backend retries the call without it.
+
 ## [0.9.2-beta] - 2026-09-17
 
 ### Fixed

@@ -197,6 +197,11 @@ To keep LLM usage **predictable and low cost**, the system **must** implement:
 - Do **not** write all-zero scores or cache them as “routine”. That permanently hides the window from later analysis.
 - Pause further LLM calls with a cooldown, then retry automatically. Surface the pause in the operator UI.
 
+### 7.5 Reasoning level
+
+- Reasoning models (GPT-5 / GPT-6 / o-series) accept a **reasoning level** (`reasoning_effort`) that trades token cost and latency against analysis depth.
+- The operator sets this in Settings. Default is **auto** (the provider’s own default). The parameter is omitted for chat models such as `gpt-4o-mini`.
+
 ---
 
 ## 8. Integration with the Rest of the System

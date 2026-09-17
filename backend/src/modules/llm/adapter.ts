@@ -2,6 +2,12 @@ import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { CRITERIA_SLUGS, type CriterionSlug, type MetaScores } from '../../types/index.js';
 import { classifyLlmException, classifyLlmHttpError } from './llmErrors.js';
+import {
+  DEFAULT_REASONING_EFFORT,
+  buildChatCompletionBody,
+  shouldRetryWithoutReasoningEffort,
+  type ReasoningEffortSetting,
+} from './reasoning.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -430,11 +436,18 @@ export class OpenAiAdapter implements LlmAdapter {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
+  private reasoningEffort: ReasoningEffortSetting;
 
-  constructor(cfg?: { apiKey?: string; model?: string; baseUrl?: string }) {
+  constructor(cfg?: {
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+    reasoningEffort?: ReasoningEffortSetting;
+  }) {
     this.apiKey = cfg?.apiKey ?? process.env.OPENAI_API_KEY ?? '';
     this.model = cfg?.model ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
     this.baseUrl = (cfg?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+    this.reasoningEffort = cfg?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
 
     if (!this.apiKey) {
       logger.warn(`[${localTimestamp()}] WARNING: OPENAI_API_KEY not set. LLM scoring will fail.`);
@@ -442,10 +455,16 @@ export class OpenAiAdapter implements LlmAdapter {
   }
 
   /** Update adapter config at runtime (e.g. when user changes settings via UI). */
-  updateConfig(cfg: { apiKey?: string; model?: string; baseUrl?: string }): void {
+  updateConfig(cfg: {
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+    reasoningEffort?: ReasoningEffortSetting;
+  }): void {
     if (cfg.apiKey !== undefined) this.apiKey = cfg.apiKey;
     if (cfg.model !== undefined) this.model = cfg.model;
     if (cfg.baseUrl !== undefined) this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
+    if (cfg.reasoningEffort !== undefined) this.reasoningEffort = cfg.reasoningEffort;
   }
 
   /** Check whether the adapter has a valid API key configured. */
@@ -745,22 +764,22 @@ export class OpenAiAdapter implements LlmAdapter {
     modelOverride?: string,
   ): Promise<{ content: string; usage: LlmUsageInfo }> {
     const effectiveModel = (modelOverride && modelOverride.trim()) ? modelOverride.trim() : this.model;
-    const body = {
+    const body = buildChatCompletionBody({
       model: effectiveModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
+      reasoningEffort: this.reasoningEffort,
       temperature: 0.1,
-      response_format: { type: 'json_object' as const },
-    };
+      responseFormat: { type: 'json_object' },
+    });
 
     const url = `${this.baseUrl}/chat/completions`;
     const headers = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${this.apiKey}`,
     };
-    const bodyStr = JSON.stringify(body);
 
     let lastError: Error | null = null;
     const maxAttempts = 2;
@@ -773,12 +792,21 @@ export class OpenAiAdapter implements LlmAdapter {
         const res = await fetch(url, {
           method: 'POST',
           headers,
-          body: bodyStr,
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
 
         if (!res.ok) {
           const errorText = await res.text();
+          if (shouldRetryWithoutReasoningEffort(res.status, errorText, body)) {
+            logger.warn(
+              `[${localTimestamp()}] LLM rejected reasoning_effort=${String(body.reasoning_effort)} ` +
+              `for model=${effectiveModel}; retrying without it`,
+            );
+            delete body.reasoning_effort;
+            lastError = classifyLlmHttpError(res.status, errorText);
+            continue;
+          }
           const classified = classifyLlmHttpError(res.status, errorText);
           if (attempt < maxAttempts && classified.retryable) {
             logger.warn(

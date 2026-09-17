@@ -7,6 +7,7 @@ import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { classifyLlmHttpError, shouldPausePipeline } from '../llm/llmErrors.js';
 import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
+import { buildChatCompletionBody, shouldRetryWithoutReasoningEffort } from '../llm/reasoning.js';
 
 /**
  * RAG-style natural language query endpoint.
@@ -277,6 +278,16 @@ export async function askQuestion(
   let res: Response;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
+  const chatBody = buildChatCompletionBody({
+    model: effectiveModel,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+    reasoningEffort: aiCfg.reasoningEffort,
+    temperature: 0.3,
+    maxTokens: 1000,
+  });
   try {
     res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -284,15 +295,7 @@ export async function askQuestion(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model: effectiveModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.3,
-        max_tokens: 1000,
-      }),
+      body: JSON.stringify(chatBody),
       signal: controller.signal,
     });
   } catch (netErr: any) {
@@ -304,6 +307,43 @@ export async function askQuestion(
     throw new Error('Failed to reach the AI service. Please check network and base URL configuration.');
   } finally {
     clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    if (shouldRetryWithoutReasoningEffort(res.status, errorText, chatBody)) {
+      logger.warn(
+        `[${localTimestamp()}] RAG LLM rejected reasoning_effort=${String(chatBody.reasoning_effort)}; retrying without it`,
+      );
+      delete chatBody.reasoning_effort;
+      const retryController = new AbortController();
+      const retryTimer = setTimeout(() => retryController.abort(), 120_000);
+      try {
+        res = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(chatBody),
+          signal: retryController.signal,
+        });
+      } catch (netErr: any) {
+        if (netErr.name === 'AbortError') {
+          throw new Error('AI service did not respond in time. Please try again.');
+        }
+        throw new Error('Failed to reach the AI service. Please check network and base URL configuration.');
+      } finally {
+        clearTimeout(retryTimer);
+      }
+    } else {
+      const classified = classifyLlmHttpError(res.status, errorText);
+      logger.error(`[${localTimestamp()}] RAG LLM error ${res.status} (${classified.kind}): ${errorText}`);
+      if (shouldPausePipeline(classified.kind)) {
+        await recordLlmFailure(db, classified);
+      }
+      throw new Error(classified.userMessage);
+    }
   }
 
   if (!res.ok) {

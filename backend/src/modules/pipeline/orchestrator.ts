@@ -53,7 +53,12 @@ async function loadPipelineConfig(db: Knex): Promise<{
  */
 async function syncAdapterConfig(db: Knex, llm: OpenAiAdapter): Promise<void> {
   const cfg = await resolveAiConfig(db);
-  llm.updateConfig({ apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl });
+  llm.updateConfig({
+    apiKey: cfg.apiKey,
+    model: cfg.model,
+    baseUrl: cfg.baseUrl,
+    reasoningEffort: cfg.reasoningEffort,
+  });
 }
 
 /**

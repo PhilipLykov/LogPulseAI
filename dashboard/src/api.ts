@@ -698,9 +698,18 @@ export interface AiProviderHealth {
   recovered_at: string | null;
 }
 
+export interface ReasoningEffortOption {
+  value: string;
+  label: string;
+  hint: string;
+}
+
 export interface AiConfigResponse {
   model: string;
   base_url: string;
+  reasoning_effort: string;
+  reasoning_effort_applied: boolean;
+  reasoning_effort_options: ReasoningEffortOption[];
   api_key_set: boolean;
   api_key_hint: string;
   api_key_source: 'database' | 'environment' | 'none';
@@ -715,6 +724,7 @@ export async function updateAiConfig(data: {
   model?: string;
   base_url?: string;
   api_key?: string;
+  reasoning_effort?: string;
 }): Promise<AiConfigResponse> {
   return apiFetch('/api/v1/ai-config', {
     method: 'PUT',

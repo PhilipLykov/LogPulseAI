@@ -21,6 +21,26 @@ interface AiConfigSectionProps {
   onAuthError: () => void;
 }
 
+const DEFAULT_REASONING_OPTIONS = [
+  { value: 'auto', label: 'Provider default', hint: 'Omit the parameter; the model uses its own default.' },
+  { value: 'none', label: 'None', hint: 'No extra reasoning. Fastest. GPT-5.1 and newer.' },
+  { value: 'minimal', label: 'Minimal', hint: 'Very little reasoning. Original GPT-5 family.' },
+  { value: 'low', label: 'Low', hint: 'Light reasoning. Lower cost and latency.' },
+  { value: 'medium', label: 'Medium', hint: 'Balanced quality and cost. Typical default on reasoning models.' },
+  { value: 'high', label: 'High', hint: 'Deeper reasoning. Higher token use and latency.' },
+  { value: 'xhigh', label: 'Extra high', hint: 'Very deep reasoning. Not supported on every model.' },
+  { value: 'max', label: 'Maximum', hint: 'Highest effort the provider allows for the model.' },
+];
+
+/** Mirrors backend isReasoningModel so the hint tracks the typed model name. */
+function modelLooksLikeReasoning(model: string): boolean {
+  const name = model.trim().toLowerCase().replace(/^.*\//, '');
+  if (!name) return false;
+  if (/(^|[-.])chat($|[-.])/.test(name) && name.startsWith('gpt-5')) return false;
+  if (name.startsWith('gpt-5') || name.startsWith('gpt-6')) return true;
+  return /^o[1-4]($|[-.])/.test(name);
+}
+
 /**
  * AI Configuration panel — lets the admin set the OpenAI-compatible model,
  * base URL, API key, and custom system prompts at runtime
@@ -38,6 +58,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showKeyField, setShowKeyField] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState('auto');
 
   // Prompt state
   const [promptsData, setPromptsData] = useState<AiPromptsResponse | null>(null);
@@ -121,6 +142,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setConfig(data);
       setModel(data.model);
       setBaseUrl(data.base_url);
+      setReasoningEffort(data.reasoning_effort ?? 'auto');
       setApiKey('');
       setShowKeyField(false);
       setPromptsData(prompts);
@@ -166,6 +188,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       const payload: Record<string, string> = {};
       if (model !== config?.model) payload.model = model;
       if (baseUrl !== config?.base_url) payload.base_url = baseUrl;
+      if (reasoningEffort !== (config?.reasoning_effort ?? 'auto')) payload.reasoning_effort = reasoningEffort;
       if (showKeyField && apiKey.trim() !== '') payload.api_key = apiKey.trim();
 
       if (Object.keys(payload).length === 0) {
@@ -226,6 +249,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setResuming(false);
     }
   };
+
+  const reasoningOptions = config?.reasoning_effort_options ?? DEFAULT_REASONING_OPTIONS;
+  const selectedReasoningHint =
+    reasoningOptions.find((opt) => opt.value === reasoningEffort)?.hint ?? '';
 
   if (loading) {
     return (
@@ -302,7 +329,30 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
             autoComplete="off"
           />
           <span className="form-hint">
-            OpenAI model name (e.g. gpt-4o-mini, gpt-4o, gpt-3.5-turbo, o3-mini)
+            OpenAI model name (e.g. gpt-4o-mini, gpt-5-mini, gpt-5.2, o3-mini)
+          </span>
+        </div>
+
+        {/* Reasoning level */}
+        <div className="form-group">
+          <label htmlFor="ai-reasoning-effort">Reasoning level</label>
+          <select
+            id="ai-reasoning-effort"
+            value={reasoningEffort}
+            onChange={(e) => setReasoningEffort(e.target.value)}
+          >
+            {reasoningOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <span className="form-hint">
+            {selectedReasoningHint} Higher levels use more tokens and take longer.
+            {' '}This is sent only to GPT-5, GPT-6, and o-series reasoning models.
+            {modelLooksLikeReasoning(model)
+              ? ' The current model accepts this setting.'
+              : ' The current model is a chat model, so the setting is stored but not sent until you switch to a reasoning model.'}
           </span>
         </div>
 

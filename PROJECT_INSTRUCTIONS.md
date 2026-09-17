@@ -105,6 +105,15 @@
 
 ---
 
+## Instruction 13 (Configurable LLM reasoning level)
+
+- The operator must be able to set the **reasoning level** (OpenAI `reasoning_effort`) for the LLM from **Settings > AI Model**, without a restart.
+- Allowed values: `auto` (omit the parameter), `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
+- Send the parameter only to reasoning models (GPT-5 / GPT-6 / o-series). Chat models must not fail because of it.
+- Higher levels cost more tokens and take longer; `auto` is the default.
+
+---
+
 ## Meta-rule for assistants
 
 - **At the start of any work on this project:** Read **PROJECT_INSTRUCTIONS.md** and **AI_ANALYSIS_SPEC.md** to align with the user’s requirements, the 6 analysis criteria, and the cost-control measures (deduplication, preprocessing, cost observability).

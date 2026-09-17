@@ -9,6 +9,11 @@ import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, resolveCriterionGuidelines, invalidateAiConfigCache, invalidateCriterionGuidelinesCache } from '../llm/aiConfig.js';
 import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT, DEFAULT_CRITERION_GUIDELINES, buildScoringPrompt } from '../llm/adapter.js';
 import { getLlmHealth, resumeLlmProvider } from '../llm/llmCircuit.js';
+import {
+  REASONING_EFFORT_OPTIONS,
+  isReasoningEffortSetting,
+  shouldApplyReasoningEffort,
+} from '../llm/reasoning.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
 import {
   loadBackupConfig,
@@ -245,7 +250,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
       // Determine source per field
       const dbRows = await db('app_config')
-        .whereIn('key', ['openai_api_key', 'openai_model', 'openai_base_url'])
+        .whereIn('key', ['openai_api_key', 'openai_model', 'openai_base_url', 'openai_reasoning_effort'])
         .select('key', 'value');
       const dbKeys = new Set(dbRows.filter(r => {
         let v = r.value;
@@ -267,6 +272,9 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       return reply.send({
         model: cfg.model,
         base_url: cfg.baseUrl,
+        reasoning_effort: cfg.reasoningEffort,
+        reasoning_effort_applied: shouldApplyReasoningEffort(cfg.model, cfg.reasoningEffort),
+        reasoning_effort_options: REASONING_EFFORT_OPTIONS,
         api_key_set: keySet,
         api_key_hint: hint,
         api_key_source: apiKeySource,
@@ -280,10 +288,12 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
-      const { model, base_url, api_key } = body;
+      const { model, base_url, api_key, reasoning_effort } = body;
 
-      if (!model && !base_url && api_key === undefined) {
-        return reply.code(400).send({ error: 'Provide at least one of: model, base_url, api_key.' });
+      if (!model && !base_url && api_key === undefined && reasoning_effort === undefined) {
+        return reply.code(400).send({
+          error: 'Provide at least one of: model, base_url, api_key, reasoning_effort.',
+        });
       }
 
       // Validate model name (alphanumeric, dashes, dots, up to 64 chars)
@@ -319,10 +329,24 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         // Allow empty string to clear the key
       }
 
+      if (reasoning_effort !== undefined) {
+        if (typeof reasoning_effort !== 'string' || !isReasoningEffortSetting(reasoning_effort.trim().toLowerCase())) {
+          return reply.code(400).send({
+            error: `reasoning_effort must be one of: ${REASONING_EFFORT_OPTIONS.map((o) => o.value).join(', ')}.`,
+          });
+        }
+      }
+
       // Upsert each provided field into app_config
       const updates: Array<{ key: string; value: string }> = [];
       if (model !== undefined) updates.push({ key: 'openai_model', value: JSON.stringify(model) });
       if (base_url !== undefined) updates.push({ key: 'openai_base_url', value: JSON.stringify(base_url) });
+      if (reasoning_effort !== undefined) {
+        updates.push({
+          key: 'openai_reasoning_effort',
+          value: JSON.stringify(reasoning_effort.trim().toLowerCase()),
+        });
+      }
       if (api_key !== undefined) {
         if (api_key === '' || api_key === null) {
           // Clear DB key — fall back to env var
@@ -377,6 +401,9 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       return reply.send({
         model: cfg.model,
         base_url: cfg.baseUrl,
+        reasoning_effort: cfg.reasoningEffort,
+        reasoning_effort_applied: shouldApplyReasoningEffort(cfg.model, cfg.reasoningEffort),
+        reasoning_effort_options: REASONING_EFFORT_OPTIONS,
         api_key_set: keySet,
         api_key_hint: hint,
         provider_health: health,

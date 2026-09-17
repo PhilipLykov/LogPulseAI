@@ -580,7 +580,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       }
 
       const llm = new OpenAiAdapter();
-      llm.updateConfig({ apiKey: aiCfg.apiKey, model: aiCfg.model, baseUrl: aiCfg.baseUrl });
+      llm.updateConfig({
+        apiKey: aiCfg.apiKey,
+        model: aiCfg.model,
+        baseUrl: aiCfg.baseUrl,
+        reasoningEffort: aiCfg.reasoningEffort,
+      });
 
       // Load dashboard config to get re-eval parameters
       const dashCfgReeval = await loadDashboardConfig();

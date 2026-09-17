@@ -11,6 +11,7 @@ import { DISCOVERY_DEFAULTS, type DiscoveryConfig } from './groupingEngine.js';
 import { computeNormalizedHash } from '../ingest/normalize.js';
 import { invalidateSourceCache } from '../ingest/sourceMatch.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
+import { buildChatCompletionBody, shouldRetryWithoutReasoningEffort } from '../llm/reasoning.js';
 
 export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
@@ -454,6 +455,16 @@ async function generateSystemDescription(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     let res: Response;
+    const chatBody = buildChatCompletionBody({
+      model: aiCfg.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      reasoningEffort: aiCfg.reasoningEffort,
+      temperature: 0.3,
+      maxTokens: 150,
+    });
     try {
       res = await fetch(`${normalizedUrl}/chat/completions`, {
         method: 'POST',
@@ -461,17 +472,24 @@ async function generateSystemDescription(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${aiCfg.apiKey}`,
         },
-        body: JSON.stringify({
-          model: aiCfg.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-          ],
-          temperature: 0.3,
-          max_tokens: 150,
-        }),
+        body: JSON.stringify(chatBody),
         signal: controller.signal,
       });
+      if (res && !res.ok) {
+        const errorText = await res.text();
+        if (shouldRetryWithoutReasoningEffort(res.status, errorText, chatBody)) {
+          delete chatBody.reasoning_effort;
+          res = await fetch(`${normalizedUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${aiCfg.apiKey}`,
+            },
+            body: JSON.stringify(chatBody),
+            signal: controller.signal,
+          });
+        }
+      }
     } catch (err: any) {
       logger.warn(`[${localTimestamp()}] Discovery LLM description failed: ${err.name === 'AbortError' ? 'timeout' : err.message}`);
       return;

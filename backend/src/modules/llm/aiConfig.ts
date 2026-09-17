@@ -1,4 +1,9 @@
 import type { Knex } from 'knex';
+import {
+  DEFAULT_REASONING_EFFORT,
+  parseReasoningEffort,
+  type ReasoningEffortSetting,
+} from './reasoning.js';
 
 /**
  * Resolved AI configuration, reading from app_config (DB) first,
@@ -11,6 +16,8 @@ export interface AiConfig {
   apiKey: string;
   model: string;
   baseUrl: string;
+  /** How hard reasoning models should think. auto = omit the API field. */
+  reasoningEffort: ReasoningEffortSetting;
 }
 
 export interface CustomPrompts {
@@ -49,7 +56,7 @@ export async function resolveAiConfig(db: Knex): Promise<AiConfig> {
   if (_cache && now - _cacheTs < CACHE_TTL_MS) return _cache;
 
   const rows = await db('app_config')
-    .whereIn('key', ['openai_api_key', 'openai_model', 'openai_base_url'])
+    .whereIn('key', ['openai_api_key', 'openai_model', 'openai_base_url', 'openai_reasoning_effort'])
     .select('key', 'value');
 
   const dbValues: Record<string, string> = {};
@@ -67,6 +74,9 @@ export async function resolveAiConfig(db: Knex): Promise<AiConfig> {
     apiKey: dbValues['openai_api_key'] ?? process.env.OPENAI_API_KEY ?? '',
     model: dbValues['openai_model'] ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
     baseUrl: (dbValues['openai_base_url'] ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, ''),
+    reasoningEffort: parseReasoningEffort(
+      dbValues['openai_reasoning_effort'] ?? process.env.OPENAI_REASONING_EFFORT ?? DEFAULT_REASONING_EFFORT,
+    ),
   };
   _cacheTs = now;
 
