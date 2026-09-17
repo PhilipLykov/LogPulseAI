@@ -7,7 +7,7 @@ import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { classifyLlmHttpError, shouldPausePipeline } from '../llm/llmErrors.js';
 import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
-import { buildChatCompletionBody, shouldRetryWithoutReasoningEffort } from '../llm/reasoning.js';
+import { buildChatCompletionBody, shouldRetryWithoutReasoningEffort, effectiveReasoningEffort } from '../llm/reasoning.js';
 
 /**
  * RAG-style natural language query endpoint.
@@ -284,7 +284,7 @@ export async function askQuestion(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    reasoningEffort: aiCfg.reasoningEffort,
+    reasoningEffort: effectiveReasoningEffort(aiCfg.reasoningEffort, taskModels.rag_reasoning_effort),
     temperature: 0.3,
     maxTokens: 1000,
   });

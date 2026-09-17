@@ -76,6 +76,26 @@ export function shouldApplyReasoningEffort(
   return setting !== 'auto' && isReasoningModel(model);
 }
 
+/**
+ * Per-task override: empty / inherit / global means "use the Settings default".
+ * A concrete value (including auto) applies only to that task.
+ */
+export function parseTaskReasoningOverride(raw: unknown): '' | ReasoningEffortSetting {
+  if (typeof raw !== 'string') return '';
+  const value = raw.trim().toLowerCase();
+  if (value === '' || value === 'inherit' || value === 'global') return '';
+  if (isReasoningEffortSetting(value)) return value;
+  return '';
+}
+
+export function effectiveReasoningEffort(
+  global: ReasoningEffortSetting,
+  taskOverride?: string | null,
+): ReasoningEffortSetting {
+  const override = parseTaskReasoningOverride(taskOverride);
+  return override === '' ? global : override;
+}
+
 export interface ChatCompletionBodyOpts {
   model: string;
   messages: Array<{ role: string; content: string }>;

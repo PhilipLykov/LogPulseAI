@@ -1554,6 +1554,9 @@ export interface TaskModelConfig {
   scoring_model: string;
   meta_model: string;
   rag_model: string;
+  scoring_reasoning_effort?: string;
+  meta_reasoning_effort?: string;
+  rag_reasoning_effort?: string;
 }
 
 export interface TaskModelConfigResponse {

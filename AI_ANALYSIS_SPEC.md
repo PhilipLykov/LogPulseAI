@@ -200,7 +200,8 @@ To keep LLM usage **predictable and low cost**, the system **must** implement:
 ### 7.5 Reasoning level
 
 - Reasoning models (GPT-5 / GPT-6 / o-series) accept a **reasoning level** (`reasoning_effort`) that trades token cost and latency against analysis depth.
-- The operator sets this in Settings. Default is **auto** (the provider’s own default). The parameter is omitted for chat models such as `gpt-4o-mini`.
+- The operator sets a **global** default in Settings. Scoring, meta-analysis, and Ask AI may each override it. Empty per-task values inherit the global default.
+- Default is **auto** (the provider’s own default). The parameter is omitted for chat models such as `gpt-4o-mini`.
 
 ---
 

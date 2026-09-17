@@ -9,6 +9,7 @@ import {
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 import { resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
+import { parseReasoningEffort } from '../llm/reasoning.js';
 import { loadTokenOptConfig } from './scoringJob.js';
 import {
   deduplicateFindings,
@@ -663,6 +664,9 @@ export async function metaAnalyzeWindow(
       {
         systemPrompt: customPrompts.metaSystemPrompt,
         modelOverride: taskModels.meta_model || undefined,
+        reasoningEffortOverride: taskModels.meta_reasoning_effort
+          ? parseReasoningEffort(taskModels.meta_reasoning_effort)
+          : undefined,
       },
     ));
     await recordLlmSuccess(db);

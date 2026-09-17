@@ -115,12 +115,19 @@ export interface MetaAnalyzeResult {
 
 // ── LLM Adapter Interface ────────────────────────────────────
 
+export interface LlmCallOptions {
+  systemPrompt?: string;
+  modelOverride?: string;
+  /** When set, replaces the adapter-wide reasoning level for this call. */
+  reasoningEffortOverride?: ReasoningEffortSetting;
+}
+
 export interface LlmAdapter {
   scoreEvents(
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
-    options?: { systemPrompt?: string; modelOverride?: string },
+    options?: LlmCallOptions,
   ): Promise<ScoreEventsResult>;
 
   metaAnalyze(
@@ -133,7 +140,7 @@ export interface LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
-    options?: { systemPrompt?: string; modelOverride?: string },
+    options?: LlmCallOptions,
   ): Promise<MetaAnalyzeResult>;
 }
 
@@ -476,7 +483,7 @@ export class OpenAiAdapter implements LlmAdapter {
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
-    options?: { systemPrompt?: string; modelOverride?: string },
+    options?: LlmCallOptions,
   ): Promise<ScoreEventsResult> {
     const sections: string[] = [];
 
@@ -502,7 +509,7 @@ export class OpenAiAdapter implements LlmAdapter {
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_SCORE_SYSTEM_PROMPT;
 
-    const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
+    const response = await this.chatCompletion(prompt, userContent, options);
     const usage = response.usage;
 
     let scores: ScoreResult[];
@@ -546,7 +553,7 @@ export class OpenAiAdapter implements LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
-    options?: { systemPrompt?: string; modelOverride?: string },
+    options?: LlmCallOptions,
   ): Promise<MetaAnalyzeResult> {
     const sections: string[] = [];
 
@@ -650,7 +657,7 @@ export class OpenAiAdapter implements LlmAdapter {
 
     let response: { content: string; usage: LlmUsageInfo };
     try {
-      response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
+      response = await this.chatCompletion(prompt, userContent, options);
     } catch (err) {
       const classified = classifyLlmException(err);
       logger.error(`[${localTimestamp()}] LLM meta-analysis network/API error (${classified.kind}): ${classified.message}`);
@@ -761,16 +768,18 @@ export class OpenAiAdapter implements LlmAdapter {
   private async chatCompletion(
     systemPrompt: string,
     userContent: string,
-    modelOverride?: string,
+    call?: LlmCallOptions,
   ): Promise<{ content: string; usage: LlmUsageInfo }> {
-    const effectiveModel = (modelOverride && modelOverride.trim()) ? modelOverride.trim() : this.model;
+    const effectiveModel = (call?.modelOverride && call.modelOverride.trim())
+      ? call.modelOverride.trim()
+      : this.model;
     const body = buildChatCompletionBody({
       model: effectiveModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
-      reasoningEffort: this.reasoningEffort,
+      reasoningEffort: call?.reasoningEffortOverride ?? this.reasoningEffort,
       temperature: 0.1,
       responseFormat: { type: 'json_object' },
     });

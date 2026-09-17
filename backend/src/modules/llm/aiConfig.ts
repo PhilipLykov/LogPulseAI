@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import {
   DEFAULT_REASONING_EFFORT,
   parseReasoningEffort,
+  parseTaskReasoningOverride,
   type ReasoningEffortSetting,
 } from './reasoning.js';
 
@@ -98,12 +99,39 @@ export function invalidateAiConfigCache(): void {
 // ── Per-task model overrides ──────────────────────────────────
 
 export interface TaskModelConfig {
-  /** Model for per-event scoring. Empty/null = use global model. */
+  /** Model for per-event scoring. Empty = use global model. */
   scoring_model: string;
-  /** Model for meta-analysis. Empty/null = use global model. */
+  /** Model for meta-analysis. Empty = use global model. */
   meta_model: string;
-  /** Model for RAG / Ask AI. Empty/null = use global model. */
+  /** Model for RAG / Ask AI. Empty = use global model. */
   rag_model: string;
+  /** Reasoning level for scoring. Empty = use the global reasoning level. */
+  scoring_reasoning_effort: string;
+  /** Reasoning level for meta-analysis. Empty = use the global reasoning level. */
+  meta_reasoning_effort: string;
+  /** Reasoning level for Ask AI. Empty = use the global reasoning level. */
+  rag_reasoning_effort: string;
+}
+
+export const TASK_MODEL_DEFAULTS: TaskModelConfig = {
+  scoring_model: '',
+  meta_model: '',
+  rag_model: '',
+  scoring_reasoning_effort: '',
+  meta_reasoning_effort: '',
+  rag_reasoning_effort: '',
+};
+
+function sanitizeTaskModelConfig(raw: unknown): TaskModelConfig {
+  const src = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {};
+  return {
+    scoring_model: typeof src.scoring_model === 'string' ? src.scoring_model : '',
+    meta_model: typeof src.meta_model === 'string' ? src.meta_model : '',
+    rag_model: typeof src.rag_model === 'string' ? src.rag_model : '',
+    scoring_reasoning_effort: parseTaskReasoningOverride(src.scoring_reasoning_effort),
+    meta_reasoning_effort: parseTaskReasoningOverride(src.meta_reasoning_effort),
+    rag_reasoning_effort: parseTaskReasoningOverride(src.rag_reasoning_effort),
+  };
 }
 
 let _taskModelCache: TaskModelConfig | null = null;
@@ -117,7 +145,7 @@ export async function resolveTaskModels(db: Knex): Promise<TaskModelConfig> {
   const now = Date.now();
   if (_taskModelCache && now - _taskModelCacheTs < CACHE_TTL_MS) return _taskModelCache;
 
-  const DEFAULTS: TaskModelConfig = { scoring_model: '', meta_model: '', rag_model: '' };
+  const DEFAULTS = TASK_MODEL_DEFAULTS;
   try {
     const row = await db('app_config').where({ key: 'task_model_config' }).first('value');
     if (!row) {
@@ -126,7 +154,7 @@ export async function resolveTaskModels(db: Knex): Promise<TaskModelConfig> {
       return DEFAULTS;
     }
     const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
-    _taskModelCache = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw as Partial<TaskModelConfig> : {}) };
+    _taskModelCache = sanitizeTaskModelConfig(raw);
     _taskModelCacheTs = now;
     return _taskModelCache!;
   } catch {

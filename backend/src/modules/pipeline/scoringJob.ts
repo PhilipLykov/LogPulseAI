@@ -6,6 +6,7 @@ import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 import { resolveCustomPrompts, resolveCriterionGuidelines, resolveTaskModels } from '../llm/aiConfig.js';
+import { parseReasoningEffort } from '../llm/reasoning.js';
 import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
@@ -440,6 +441,9 @@ export async function runPerEventScoringJob(
             {
               systemPrompt: effectiveScoringPrompt,
               modelOverride: taskModels.scoring_model || undefined,
+              reasoningEffortOverride: taskModels.scoring_reasoning_effort
+                ? parseReasoningEffort(taskModels.scoring_reasoning_effort)
+                : undefined,
             },
           );
 

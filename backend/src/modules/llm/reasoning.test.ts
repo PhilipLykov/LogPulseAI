@@ -6,6 +6,7 @@ import {
   shouldApplyReasoningEffort,
   buildChatCompletionBody,
   shouldRetryWithoutReasoningEffort,
+  effectiveReasoningEffort,
 } from './reasoning.js';
 
 describe('parseReasoningEffort', () => {
@@ -95,6 +96,19 @@ describe('buildChatCompletionBody', () => {
     });
     assert.equal(body.max_tokens, 150);
     assert.equal(body.max_completion_tokens, undefined);
+  });
+});
+
+describe('effectiveReasoningEffort', () => {
+  it('inherits the global level when the task override is empty', () => {
+    assert.equal(effectiveReasoningEffort('high', ''), 'high');
+    assert.equal(effectiveReasoningEffort('high', 'inherit'), 'high');
+    assert.equal(effectiveReasoningEffort('low', undefined), 'low');
+  });
+
+  it('lets a task pin auto even when the global level is high', () => {
+    assert.equal(effectiveReasoningEffort('high', 'auto'), 'auto');
+    assert.equal(effectiveReasoningEffort('auto', 'low'), 'low');
   });
 });
 

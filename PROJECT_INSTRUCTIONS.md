@@ -111,6 +111,7 @@
 - Allowed values: `auto` (omit the parameter), `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 - Send the parameter only to reasoning models (GPT-5 / GPT-6 / o-series). Chat models must not fail because of it.
 - Higher levels cost more tokens and take longer; `auto` is the default.
+- Scoring, meta-analysis, and Ask AI may each override the global reasoning level. An empty per-task value inherits the global setting.
 
 ---
 

@@ -12,6 +12,7 @@ import { getLlmHealth, resumeLlmProvider } from '../llm/llmCircuit.js';
 import {
   REASONING_EFFORT_OPTIONS,
   isReasoningEffortSetting,
+  parseTaskReasoningOverride,
   shouldApplyReasoningEffort,
 } from '../llm/reasoning.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
@@ -1316,6 +1317,9 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     scoring_model: '',
     meta_model: '',
     rag_model: '',
+    scoring_reasoning_effort: '',
+    meta_reasoning_effort: '',
+    rag_reasoning_effort: '',
   };
 
   /** GET /api/v1/task-model-config — return per-task model overrides. */
@@ -1330,7 +1334,19 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
           if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
         }
-        const config = { ...TASK_MODEL_DEFAULTS, ...parsed };
+        const config = {
+          ...TASK_MODEL_DEFAULTS,
+          ...parsed,
+          scoring_reasoning_effort: parseTaskReasoningOverride(
+            (parsed.scoring_reasoning_effort as string) ?? '',
+          ),
+          meta_reasoning_effort: parseTaskReasoningOverride(
+            (parsed.meta_reasoning_effort as string) ?? '',
+          ),
+          rag_reasoning_effort: parseTaskReasoningOverride(
+            (parsed.rag_reasoning_effort as string) ?? '',
+          ),
+        };
         return reply.send({ config, defaults: TASK_MODEL_DEFAULTS });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Failed to fetch task-model config: ${err.message}`);
@@ -1355,6 +1371,21 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         }
       }
 
+      for (const key of ['scoring_reasoning_effort', 'meta_reasoning_effort', 'rag_reasoning_effort']) {
+        if (body[key] !== undefined) {
+          if (typeof body[key] !== 'string') {
+            return reply.code(400).send({ error: `${key} must be a string.` });
+          }
+          const normalized = body[key].trim().toLowerCase();
+          if (normalized !== '' && !isReasoningEffortSetting(normalized)) {
+            return reply.code(400).send({
+              error: `${key} must be empty (inherit global) or one of: ${REASONING_EFFORT_OPTIONS.map((o) => o.value).join(', ')}.`,
+            });
+          }
+          body[key] = normalized;
+        }
+      }
+
       try {
         const existing = await db('app_config').where({ key: 'task_model_config' }).first('value');
         let current: Record<string, unknown> = { ...TASK_MODEL_DEFAULTS };
@@ -1374,6 +1405,8 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           INSERT INTO app_config (key, value) VALUES ('task_model_config', ?::jsonb)
           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         `, [JSON.stringify(current)]);
+
+        invalidateAiConfigCache();
 
         await writeAuditLog(db, {
           actor_name: getActorName(request),
