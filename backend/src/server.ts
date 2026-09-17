@@ -27,17 +27,15 @@ async function main(): Promise<void> {
 
   // 1. Initialize database (run migrations + seeds)
   await initDb();
-
-  // Repair template caches, scored_at zeros, and synthetic "routine" windows
-  // left by the old "failed LLM → write zeros" path.
   const db = getDb();
-  await runQuotaPoisonRecovery(db);
 
   // 2. Ensure at least one admin API key exists + bootstrap admin user
   await ensureAdminKey(db, config.adminApiKey || undefined);
   await ensureAdminUser(db);
 
-  // 3. Build and start Fastify app
+  // 3. Bind HTTP before score repair. 0.9.5 ran a single multi-million-row
+  //    UPDATE first, so port 3000 never opened and the dashboard showed
+  //    "Network error".
   const app = await buildApp();
 
   try {
@@ -48,21 +46,25 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 4. Start pipeline scheduler — always starts, checks AI config dynamically
+  // 4. Reopen poisoned zero scores (batched). Pipeline waits so it does not
+  //    write new "all routine" windows on top of the old ones.
+  await runQuotaPoisonRecovery(db);
+
+  // 5. Start pipeline scheduler — always starts, checks AI config dynamically
   //    (API key may come from env or DB, and can be set/changed via UI at runtime)
   const llm = new OpenAiAdapter();
   const pipelineScheduler = startPipelineScheduler(db, llm);
 
-  // 5. Start connector poll scheduler
+  // 6. Start connector poll scheduler
   const connectorIntervalMs = envIntervalMs(process.env.CONNECTOR_POLL_INTERVAL_MS, 60_000);
   const connectorScheduler = startConnectorScheduler(db, connectorIntervalMs);
 
-  // 6. Start database maintenance scheduler (retention cleanup, VACUUM, REINDEX)
+  // 7. Start database maintenance scheduler (retention cleanup, VACUUM, REINDEX)
   //    Default check interval: 30 minutes (actual run frequency governed by maintenance_interval_hours config)
   const maintenanceCheckMs = envIntervalMs(process.env.MAINTENANCE_CHECK_INTERVAL_MS, 30 * 60 * 1000);
   const maintenanceScheduler = startMaintenanceScheduler(db, maintenanceCheckMs);
 
-  // 7. Start scheduled-report scheduler
+  // 8. Start scheduled-report scheduler
   const scheduledReportsIntervalMs = envIntervalMs(process.env.SCHEDULED_REPORT_CHECK_INTERVAL_MS, 60_000);
   const scheduledReportScheduler = startScheduledReportScheduler(db, scheduledReportsIntervalMs);
 

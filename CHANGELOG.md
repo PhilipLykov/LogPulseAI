@@ -5,6 +5,11 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6-beta] - 2026-09-17
+
+### Fixed
+- **Dashboard showed “Network error” after installing 0.9.5**: Score repair ran one unbounded `UPDATE … RETURNING` on seven days of events *before* the API listened on port 3000. The web UI was up, but the browser could not open the backend. HTTP now binds first; repair runs afterward in batches of 2,000 rows.
+
 ## [0.9.5-beta] - 2026-09-17
 
 ### Fixed

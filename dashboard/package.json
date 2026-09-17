@@ -1,7 +1,7 @@
 {
   "name": "logpulse-ai-dashboard",
   "private": true,
-  "version": "0.9.5-beta",
+  "version": "0.9.6-beta",
   "type": "module",
   "scripts": {
     "dev": "vite",

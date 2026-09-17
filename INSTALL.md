@@ -915,6 +915,7 @@ docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 
 ### Dashboard shows "Network Error"
 
+- From **v0.9.6-beta** the API listens before score repair. If you installed **0.9.5-beta** and the login page says “Network error”, the dashboard is running but port **3000** is not: `curl http://SERVER:3000/healthz` should return JSON. Upgrade to 0.9.6.
 - The `VITE_API_URL` in `.env` must be reachable from your browser (not from the container).
 - For LAN access, use the server's IP address, not `localhost`.
 - After changing `VITE_API_URL`, rebuild: `docker compose up -d --build dashboard`

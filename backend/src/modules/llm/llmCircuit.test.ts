@@ -4,6 +4,7 @@ import {
   isLlmPaused,
   ZERO_SCORE_WINDOW_SUMMARY,
   POISON_REPAIR_LOOKBACK_DAYS,
+  POISON_REPAIR_BATCH_SIZE,
   type LlmProviderHealth,
 } from './llmCircuit.js';
 
@@ -50,5 +51,10 @@ describe('quota poison recovery v2 constants', () => {
 
   it('repairs a 7-day lookback matching the dashboard score window', () => {
     assert.equal(POISON_REPAIR_LOOKBACK_DAYS, 7);
+  });
+
+  it('updates events in small batches so startup can bind HTTP first', () => {
+    assert.equal(POISON_REPAIR_BATCH_SIZE, 2000);
+    assert.ok(POISON_REPAIR_BATCH_SIZE < 50_000);
   });
 });

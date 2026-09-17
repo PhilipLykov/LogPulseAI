@@ -18,6 +18,9 @@ const AUTH_PAUSE_MS = 15 * 60_000;
 /** Must match dashboard default score_display_window_days and scoring lookback. */
 export const POISON_REPAIR_LOOKBACK_DAYS = 7;
 
+/** Rows per UPDATE so startup cannot materialise millions of IDs in one query. */
+export const POISON_REPAIR_BATCH_SIZE = 2000;
+
 /**
  * Written by skip_zero_score_meta when every event in a window has max score 0.
  * Poisoned quota-outage windows used the same text, so recovery deletes it.
@@ -105,10 +108,76 @@ function nextPauseMs(kind: LlmErrorKind, consecutiveFailures: number): number {
   return exp;
 }
 
-function countFromRaw(result: { rows?: Array<{ cnt?: number }>; rowCount?: number }): number {
+function countFromRaw(result: { rows?: Array<{ cnt?: number }>; rowCount?: number | null }): number {
   const fromRow = Number(result.rows?.[0]?.cnt);
   if (Number.isFinite(fromRow)) return fromRow;
   return Number(result.rowCount) || 0;
+}
+
+/** Clear scored_at in small commits so the HTTP server is not blocked by one giant UPDATE. */
+async function reopenPgZeroScoreEvents(db: Knex, cutoff: string): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const result = await db.raw(`
+      UPDATE events e
+      SET scored_at = NULL
+      FROM (
+        SELECT e2.id, e2.timestamp
+        FROM events e2
+        WHERE e2.scored_at IS NOT NULL
+          AND e2.acknowledged_at IS NULL
+          AND e2.timestamp >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM event_scores es
+            WHERE es.event_id = e2.id::text
+              AND es.score > 0
+              AND es.score_type = 'event'
+          )
+        LIMIT ?
+      ) s
+      WHERE e.id = s.id AND e.timestamp = s.timestamp
+    `, [cutoff, POISON_REPAIR_BATCH_SIZE]);
+    const n = Number(result.rowCount) || 0;
+    total += n;
+    if (n === 0) break;
+    logger.info(
+      `[${localTimestamp()}] Quota-poison recovery v2: reopened ${total} PostgreSQL events so far…`,
+    );
+    if (n < POISON_REPAIR_BATCH_SIZE) break;
+  }
+  return total;
+}
+
+async function reopenEsZeroScoreEvents(db: Knex, cutoff: string): Promise<number> {
+  const hasEsMeta = await db.schema.hasTable('es_event_metadata');
+  if (!hasEsMeta) return 0;
+  let total = 0;
+  for (;;) {
+    const result = await db.raw(`
+      UPDATE es_event_metadata m
+      SET scored_at = NULL
+      FROM (
+        SELECT m2.system_id, m2.es_event_id
+        FROM es_event_metadata m2
+        WHERE m2.scored_at IS NOT NULL
+          AND m2.acknowledged_at IS NULL
+          AND COALESCE(m2.event_timestamp, m2.scored_at, m2.created_at) >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM event_scores es
+            WHERE es.event_id = m2.es_event_id
+              AND es.score > 0
+              AND es.score_type = 'event'
+          )
+        LIMIT ?
+      ) s
+      WHERE m.system_id = s.system_id AND m.es_event_id = s.es_event_id
+    `, [cutoff, POISON_REPAIR_BATCH_SIZE]);
+    const n = Number(result.rowCount) || 0;
+    total += n;
+    if (n === 0) break;
+    if (n < POISON_REPAIR_BATCH_SIZE) break;
+  }
+  return total;
 }
 
 /**
@@ -214,48 +283,8 @@ export async function repairPoisonedZeroScores(db: Knex): Promise<PoisonScoreRep
     ).toISOString();
 
     const templatesCleared = await invalidateTemplateScoreCache(db);
-
-    const eventsResult = await db.raw(`
-      WITH reopened AS (
-        UPDATE events e
-        SET scored_at = NULL
-        WHERE e.scored_at IS NOT NULL
-          AND e.acknowledged_at IS NULL
-          AND e.timestamp >= ?
-          AND NOT EXISTS (
-            SELECT 1 FROM event_scores es
-            WHERE es.event_id = e.id::text
-              AND es.score > 0
-              AND es.score_type = 'event'
-          )
-        RETURNING e.id
-      )
-      SELECT COUNT(*)::int AS cnt FROM reopened
-    `, [cutoff]);
-    const eventsReopened = countFromRaw(eventsResult);
-
-    let esEventsReopened = 0;
-    const hasEsMeta = await db.schema.hasTable('es_event_metadata');
-    if (hasEsMeta) {
-      const esResult = await db.raw(`
-        WITH reopened AS (
-          UPDATE es_event_metadata m
-          SET scored_at = NULL
-          WHERE m.scored_at IS NOT NULL
-            AND m.acknowledged_at IS NULL
-            AND COALESCE(m.event_timestamp, m.scored_at, m.created_at) >= ?
-            AND NOT EXISTS (
-              SELECT 1 FROM event_scores es
-              WHERE es.event_id = m.es_event_id
-                AND es.score > 0
-                AND es.score_type = 'event'
-            )
-          RETURNING m.es_event_id
-        )
-        SELECT COUNT(*)::int AS cnt FROM reopened
-      `, [cutoff]);
-      esEventsReopened = countFromRaw(esResult);
-    }
+    const eventsReopened = await reopenPgZeroScoreEvents(db, cutoff);
+    const esEventsReopened = await reopenEsZeroScoreEvents(db, cutoff);
 
     const windowsResult = await db.raw(`
       WITH zero_windows AS (
@@ -277,14 +306,13 @@ export async function repairPoisonedZeroScores(db: Knex): Promise<PoisonScoreRep
       del_eff AS (
         DELETE FROM effective_scores
         WHERE window_id IN (SELECT id FROM zero_windows)
-        RETURNING window_id
       ),
       del_meta AS (
         DELETE FROM meta_results
         WHERE window_id IN (SELECT id FROM zero_windows)
         RETURNING window_id
       )
-      SELECT COUNT(*)::int AS cnt FROM zero_windows
+      SELECT COUNT(*)::int AS cnt FROM del_meta
     `, [cutoff, ZERO_SCORE_WINDOW_SUMMARY]);
     const windowsReopened = countFromRaw(windowsResult);
 
