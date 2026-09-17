@@ -9,10 +9,21 @@ import {
 
 const HEALTH_KEY = 'llm_provider_health';
 const RECOVERY_FLAG_KEY = 'llm_quota_recovery_v1';
+const RECOVERY_FLAG_V2_KEY = 'llm_quota_recovery_v2';
 
 const MIN_PAUSE_MS = 2 * 60_000;
 const MAX_PAUSE_MS = 60 * 60_000;
 const AUTH_PAUSE_MS = 15 * 60_000;
+
+/** Must match dashboard default score_display_window_days and scoring lookback. */
+export const POISON_REPAIR_LOOKBACK_DAYS = 7;
+
+/**
+ * Written by skip_zero_score_meta when every event in a window has max score 0.
+ * Poisoned quota-outage windows used the same text, so recovery deletes it.
+ */
+export const ZERO_SCORE_WINDOW_SUMMARY =
+  'All events in this window scored as routine. No significant issues detected.';
 
 export interface LlmProviderHealth {
   state: 'ok' | 'paused';
@@ -22,6 +33,14 @@ export interface LlmProviderHealth {
   last_error_at: string | null;
   consecutive_failures: number;
   recovered_at: string | null;
+}
+
+export interface PoisonScoreRepairResult {
+  skipped: boolean;
+  templatesCleared: number;
+  eventsReopened: number;
+  esEventsReopened: number;
+  windowsReopened: number;
 }
 
 const HEALTH_DEFAULTS: LlmProviderHealth = {
@@ -86,6 +105,12 @@ function nextPauseMs(kind: LlmErrorKind, consecutiveFailures: number): number {
   return exp;
 }
 
+function countFromRaw(result: { rows?: Array<{ cnt?: number }>; rowCount?: number }): number {
+  const fromRow = Number(result.rows?.[0]?.cnt);
+  if (Number.isFinite(fromRow)) return fromRow;
+  return Number(result.rowCount) || 0;
+}
+
 /**
  * Record a provider failure. Quota and auth open a pause so we do not
  * keep marking events as scored with fake zeros.
@@ -135,24 +160,162 @@ export async function recordLlmSuccess(db: Knex): Promise<void> {
     recovered_at: new Date().toISOString(),
   };
   await saveHealth(db, health);
+  const repair = await repairPoisonedZeroScores(db);
   logger.info(
     `[${localTimestamp()}] LLM provider recovered after ${prev.consecutive_failures} failure(s); ` +
-    `cleared ${cleared} cached template scores so analysis resumes with live scoring.`,
+    `cleared ${cleared} cached template scores; reopened events=${repair.eventsReopened}, ` +
+    `windows=${repair.windowsReopened}.`,
   );
 }
 
-/** Operator-triggered resume: clear the pause and drop cached scores. */
-export async function resumeLlmProvider(db: Knex): Promise<{ health: LlmProviderHealth; cleared: number }> {
+/** Operator-triggered resume: clear the pause and drop poisoned scores. */
+export async function resumeLlmProvider(db: Knex): Promise<{
+  health: LlmProviderHealth;
+  cleared: number;
+  repair: PoisonScoreRepairResult;
+}> {
   const cleared = await invalidateTemplateScoreCache(db);
+  const repair = await repairPoisonedZeroScores(db);
   const health: LlmProviderHealth = {
     ...HEALTH_DEFAULTS,
     recovered_at: new Date().toISOString(),
   };
   await saveHealth(db, health);
   logger.info(
-    `[${localTimestamp()}] LLM provider pause cleared by operator; ${cleared} template caches invalidated.`,
+    `[${localTimestamp()}] LLM provider pause cleared by operator; ${cleared} template caches invalidated; ` +
+    `reopened events=${repair.eventsReopened} es=${repair.esEventsReopened} windows=${repair.windowsReopened}.`,
   );
-  return { health, cleared };
+  return { health, cleared, repair };
+}
+
+/**
+ * Reopen events and windows that were stored as all-zero / "routine" during a
+ * provider outage. Template-cache clear alone is not enough: scored_at and
+ * skip_zero_score_meta rows keep the dashboard at 0 until they are removed.
+ *
+ * Runs once (flag llm_quota_recovery_v2). Does not touch events that already
+ * have a positive event_score.
+ */
+export async function repairPoisonedZeroScores(db: Knex): Promise<PoisonScoreRepairResult> {
+  const empty: PoisonScoreRepairResult = {
+    skipped: true,
+    templatesCleared: 0,
+    eventsReopened: 0,
+    esEventsReopened: 0,
+    windowsReopened: 0,
+  };
+
+  try {
+    const flag = await db('app_config').where({ key: RECOVERY_FLAG_V2_KEY }).first('key');
+    if (flag) return empty;
+
+    const cutoff = new Date(
+      Date.now() - POISON_REPAIR_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const templatesCleared = await invalidateTemplateScoreCache(db);
+
+    const eventsResult = await db.raw(`
+      WITH reopened AS (
+        UPDATE events e
+        SET scored_at = NULL
+        WHERE e.scored_at IS NOT NULL
+          AND e.acknowledged_at IS NULL
+          AND e.timestamp >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM event_scores es
+            WHERE es.event_id = e.id::text
+              AND es.score > 0
+              AND es.score_type = 'event'
+          )
+        RETURNING e.id
+      )
+      SELECT COUNT(*)::int AS cnt FROM reopened
+    `, [cutoff]);
+    const eventsReopened = countFromRaw(eventsResult);
+
+    let esEventsReopened = 0;
+    const hasEsMeta = await db.schema.hasTable('es_event_metadata');
+    if (hasEsMeta) {
+      const esResult = await db.raw(`
+        WITH reopened AS (
+          UPDATE es_event_metadata m
+          SET scored_at = NULL
+          WHERE m.scored_at IS NOT NULL
+            AND m.acknowledged_at IS NULL
+            AND COALESCE(m.event_timestamp, m.scored_at, m.created_at) >= ?
+            AND NOT EXISTS (
+              SELECT 1 FROM event_scores es
+              WHERE es.event_id = m.es_event_id
+                AND es.score > 0
+                AND es.score_type = 'event'
+            )
+          RETURNING m.es_event_id
+        )
+        SELECT COUNT(*)::int AS cnt FROM reopened
+      `, [cutoff]);
+      esEventsReopened = countFromRaw(esResult);
+    }
+
+    const windowsResult = await db.raw(`
+      WITH zero_windows AS (
+        SELECT w.id
+        FROM windows w
+        WHERE w.to_ts >= ?
+          AND EXISTS (SELECT 1 FROM meta_results m WHERE m.window_id = w.id)
+          AND (
+            EXISTS (
+              SELECT 1 FROM meta_results m
+              WHERE m.window_id = w.id AND m.summary = ?
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM effective_scores e
+              WHERE e.window_id = w.id AND e.effective_value > 0
+            )
+          )
+      ),
+      del_eff AS (
+        DELETE FROM effective_scores
+        WHERE window_id IN (SELECT id FROM zero_windows)
+        RETURNING window_id
+      ),
+      del_meta AS (
+        DELETE FROM meta_results
+        WHERE window_id IN (SELECT id FROM zero_windows)
+        RETURNING window_id
+      )
+      SELECT COUNT(*)::int AS cnt FROM zero_windows
+    `, [cutoff, ZERO_SCORE_WINDOW_SUMMARY]);
+    const windowsReopened = countFromRaw(windowsResult);
+
+    await db.raw(`
+      INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+      ON CONFLICT (key) DO NOTHING
+    `, [RECOVERY_FLAG_V2_KEY, JSON.stringify({
+      done_at: new Date().toISOString(),
+      templatesCleared,
+      eventsReopened,
+      esEventsReopened,
+      windowsReopened,
+    })]);
+
+    logger.warn(
+      `[${localTimestamp()}] Quota-poison recovery v2: cleared ${templatesCleared} template caches, ` +
+      `reopened ${eventsReopened} PG events, ${esEventsReopened} ES events, ` +
+      `${windowsReopened} all-zero analysis windows (lookback ${POISON_REPAIR_LOOKBACK_DAYS}d).`,
+    );
+
+    return {
+      skipped: false,
+      templatesCleared,
+      eventsReopened,
+      esEventsReopened,
+      windowsReopened,
+    };
+  } catch (err: any) {
+    logger.warn(`[${localTimestamp()}] Quota-poison recovery v2 skipped: ${err.message}`);
+    return empty;
+  }
 }
 
 /**
@@ -160,34 +323,39 @@ export async function resumeLlmProvider(db: Knex): Promise<{ health: LlmProvider
  * scores into the template cache. If recent usage rows have zero tokens, the
  * cache is almost certainly poisoned and must be cleared so scoring resumes
  * after a balance refill.
+ *
+ * v1 only cleared caches. v2 also reopens scored-at zeros and synthetic
+ * "all routine" windows so the dashboard is not stuck at 0%.
  */
 export async function runQuotaPoisonRecovery(db: Knex): Promise<void> {
   try {
     const flag = await db('app_config').where({ key: RECOVERY_FLAG_KEY }).first('key');
-    if (flag) return;
+    if (!flag) {
+      const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      const poisoned = await db('llm_usage')
+        .where({ run_type: 'per_event' })
+        .where('token_input', 0)
+        .where('token_output', 0)
+        .where('created_at', '>=', since)
+        .first('id');
 
-    const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-    const poisoned = await db('llm_usage')
-      .where({ run_type: 'per_event' })
-      .where('token_input', 0)
-      .where('token_output', 0)
-      .where('created_at', '>=', since)
-      .first('id');
+      let cleared = 0;
+      if (poisoned) {
+        cleared = await invalidateTemplateScoreCache(db);
+        logger.warn(
+          `[${localTimestamp()}] Quota-poison recovery: cleared ${cleared} template score caches ` +
+          `after detecting zero-token scoring runs (failed LLM calls that were stored as zeros).`,
+        );
+      }
 
-    let cleared = 0;
-    if (poisoned) {
-      cleared = await invalidateTemplateScoreCache(db);
-      logger.warn(
-        `[${localTimestamp()}] Quota-poison recovery: cleared ${cleared} template score caches ` +
-        `after detecting zero-token scoring runs (failed LLM calls that were stored as zeros).`,
-      );
+      await db.raw(`
+        INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+        ON CONFLICT (key) DO NOTHING
+      `, [RECOVERY_FLAG_KEY, JSON.stringify({ done_at: new Date().toISOString(), cleared })]);
     }
-
-    await db.raw(`
-      INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
-      ON CONFLICT (key) DO NOTHING
-    `, [RECOVERY_FLAG_KEY, JSON.stringify({ done_at: new Date().toISOString(), cleared })]);
   } catch (err: any) {
     logger.warn(`[${localTimestamp()}] Quota-poison recovery skipped: ${err.message}`);
   }
+
+  await repairPoisonedZeroScores(db);
 }

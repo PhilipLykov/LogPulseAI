@@ -22,7 +22,7 @@ import { getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents, matchesNormalBehavior } from './normalBehavior.js';
 import { logger } from '../../config/logger.js';
 import { classifyLlmException, shouldPausePipeline } from '../llm/llmErrors.js';
-import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
+import { recordLlmFailure, recordLlmSuccess, ZERO_SCORE_WINDOW_SUMMARY } from '../llm/llmCircuit.js';
 
 import { DEFAULT_W_META } from '../events/recalcScores.js';
 /** Default number of previous window summaries to include as context. */
@@ -325,7 +325,7 @@ export async function metaAnalyzeWindow(
           window_id: windowId,
           meta_scores: JSON.stringify(zeroMetaScores),
           analysis_confidence: null,
-          summary: 'All events in this window scored as routine. No significant issues detected.',
+          summary: ZERO_SCORE_WINDOW_SUMMARY,
           findings: JSON.stringify([]),
           recommended_action: null,
           key_event_ids: null,

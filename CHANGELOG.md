@@ -5,6 +5,12 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5-beta] - 2026-09-17
+
+### Fixed
+- **Per-task reasoning levels were not visible in Settings**: 0.9.4 stored the controls behind a collapsed section at the bottom of the AI Model page. Scoring, meta-analysis, and Ask AI reasoning selects are now on the main AI Model form, immediately under the global reasoning level.
+- **Dashboard stayed at 0% after a provider credit refill**: 0.9.2 recovery only cleared template caches. Events marked `scored_at` with no positive scores, and skip-zero-score “all routine” windows, were never retried, so the last 7 days of dashboard bars stayed at zero. Startup and **Resume now** now reopen those events and windows once (`llm_quota_recovery_v2`). Scoring lookback is 7 days to match the dashboard window.
+
 ## [0.9.4-beta] - 2026-09-17
 
 ### Added

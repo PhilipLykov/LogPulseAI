@@ -32,6 +32,15 @@ const DEFAULT_REASONING_OPTIONS = [
   { value: 'max', label: 'Maximum', hint: 'Highest effort the provider allows for the model.' },
 ];
 
+const EMPTY_TASK_MODEL: TaskModelConfig = {
+  scoring_model: '',
+  meta_model: '',
+  rag_model: '',
+  scoring_reasoning_effort: '',
+  meta_reasoning_effort: '',
+  rag_reasoning_effort: '',
+};
+
 /** Mirrors backend isReasoningModel so the hint tracks the typed model name. */
 function modelLooksLikeReasoning(model: string): boolean {
   const name = model.trim().toLowerCase().replace(/^.*\//, '');
@@ -108,9 +117,9 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [pipeError, setPipeError] = useState('');
 
   // Per-task model config state
-  const [, setTaskModelResp] = useState<TaskModelConfigResponse | null>(null);
-  const [taskModelCfg, setTaskModelCfg] = useState<TaskModelConfig | null>(null);
-  const [showTaskModel, setShowTaskModel] = useState(false);
+  const [taskModelResp, setTaskModelResp] = useState<TaskModelConfigResponse | null>(null);
+  const [taskModelCfg, setTaskModelCfg] = useState<TaskModelConfig>(EMPTY_TASK_MODEL);
+  const [showTaskModel, setShowTaskModel] = useState(true);
   const [savingTaskModel, setSavingTaskModel] = useState(false);
   const [taskModelSuccess, setTaskModelSuccess] = useState('');
   const [taskModelError, setTaskModelError] = useState('');
@@ -198,16 +207,43 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       if (reasoningEffort !== (config?.reasoning_effort ?? 'auto')) payload.reasoning_effort = reasoningEffort;
       if (showKeyField && apiKey.trim() !== '') payload.api_key = apiKey.trim();
 
-      if (Object.keys(payload).length === 0) {
+      const prevTask = taskModelResp?.config;
+      const taskReasoningChanged = !!prevTask && (
+        (prevTask.scoring_reasoning_effort ?? '') !== (taskModelCfg.scoring_reasoning_effort ?? '')
+        || (prevTask.meta_reasoning_effort ?? '') !== (taskModelCfg.meta_reasoning_effort ?? '')
+        || (prevTask.rag_reasoning_effort ?? '') !== (taskModelCfg.rag_reasoning_effort ?? '')
+      );
+
+      if (Object.keys(payload).length === 0 && !taskReasoningChanged) {
         setSuccess('No changes to save.');
         setSaving(false);
         return;
       }
 
-      const updated = await updateAiConfig(payload);
-      setConfig(updated);
-      setApiKey('');
-      setShowKeyField(false);
+      if (Object.keys(payload).length > 0) {
+        const updated = await updateAiConfig(payload);
+        setConfig(updated);
+        setApiKey('');
+        setShowKeyField(false);
+      }
+
+      if (taskReasoningChanged) {
+        const updatedTask = await updateTaskModelConfig({
+          scoring_reasoning_effort: taskModelCfg.scoring_reasoning_effort ?? '',
+          meta_reasoning_effort: taskModelCfg.meta_reasoning_effort ?? '',
+          rag_reasoning_effort: taskModelCfg.rag_reasoning_effort ?? '',
+        });
+        setTaskModelResp(updatedTask);
+        setTaskModelCfg({
+          scoring_model: updatedTask.config.scoring_model ?? '',
+          meta_model: updatedTask.config.meta_model ?? '',
+          rag_model: updatedTask.config.rag_model ?? '',
+          scoring_reasoning_effort: updatedTask.config.scoring_reasoning_effort ?? '',
+          meta_reasoning_effort: updatedTask.config.meta_reasoning_effort ?? '',
+          rag_reasoning_effort: updatedTask.config.rag_reasoning_effort ?? '',
+        });
+      }
+
       setSuccess('AI configuration saved successfully. Changes take effect on the next pipeline run.');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -245,8 +281,12 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
     try {
       const result = await resumeAiProvider();
       setConfig((prev) => prev ? { ...prev, provider_health: result.provider_health } : prev);
+      const reopened = (result.events_reopened ?? 0) + (result.es_events_reopened ?? 0);
+      const windows = result.windows_reopened ?? 0;
       setSuccess(
-        `AI provider pause cleared. ${result.cleared_templates} cached template scores were dropped so the next pipeline run will score events again.`,
+        result.repair_skipped
+          ? `AI provider pause cleared. ${result.cleared_templates} cached template scores were dropped so the next pipeline run will score events again.`
+          : `AI provider pause cleared. Dropped ${result.cleared_templates} cached templates, reopened ${reopened} zero-score events and ${windows} analysis windows so the next pipeline run can score them again.`,
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -360,8 +400,59 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
             {modelLooksLikeReasoning(model)
               ? ' The current model accepts this setting.'
               : ' The current model is a chat model, so the setting is stored but not sent until you switch to a reasoning model.'}
+            {' '}Per-task levels below override this for scoring, meta-analysis, or Ask AI.
           </span>
         </div>
+
+        <fieldset className="tok-opt-group">
+          <legend>Reasoning level per task</legend>
+          <span className="form-hint">
+            Leave as &quot;Use global reasoning level&quot; to inherit the setting above.
+            Saved with Save Configuration.
+          </span>
+          <div className="form-group">
+            <label htmlFor="task-reasoning-scoring">Scoring reasoning</label>
+            <select
+              id="task-reasoning-scoring"
+              value={taskModelCfg.scoring_reasoning_effort ?? ''}
+              onChange={(e) => setTaskModelCfg({ ...taskModelCfg, scoring_reasoning_effort: e.target.value })}
+            >
+              <option value="">Use global reasoning level</option>
+              {reasoningOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="form-hint">Applies to per-event scoring calls.</span>
+          </div>
+          <div className="form-group">
+            <label htmlFor="task-reasoning-meta">Meta-analysis reasoning</label>
+            <select
+              id="task-reasoning-meta"
+              value={taskModelCfg.meta_reasoning_effort ?? ''}
+              onChange={(e) => setTaskModelCfg({ ...taskModelCfg, meta_reasoning_effort: e.target.value })}
+            >
+              <option value="">Use global reasoning level</option>
+              {reasoningOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="form-hint">Applies to window summaries and findings.</span>
+          </div>
+          <div className="form-group">
+            <label htmlFor="task-reasoning-rag">Ask AI reasoning</label>
+            <select
+              id="task-reasoning-rag"
+              value={taskModelCfg.rag_reasoning_effort ?? ''}
+              onChange={(e) => setTaskModelCfg({ ...taskModelCfg, rag_reasoning_effort: e.target.value })}
+            >
+              <option value="">Use global reasoning level</option>
+              {reasoningOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="form-hint">Applies to the Ask AI answers.</span>
+          </div>
+        </fieldset>
 
         {/* Base URL */}
         <div className="form-group">
@@ -1759,11 +1850,11 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
 
       {/* ── Per-Task Model Configuration (O3) ────────────── */}
       <div className="ai-prompts-section">
-        <h3>Per-Task Model and Reasoning Overrides</h3>
+        <h3>Per-Task Model Overrides</h3>
         <p className="ai-config-desc">
-          Optionally use a different model or reasoning level for scoring, meta-analysis, and Ask AI.
-          Leave a field empty to inherit the global model and reasoning level configured above.
-          Typical pattern: a cheaper model or lower reasoning level for high-volume scoring, and a stronger setting for meta-analysis.
+          Optionally use a different model for scoring, meta-analysis, and Ask AI.
+          Leave a field empty to inherit the global model configured above.
+          Reasoning levels for each task are in the form at the top of this page.
         </p>
 
         {taskModelError && (
@@ -1786,10 +1877,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
             onClick={() => setShowTaskModel((v) => !v)}
           >
             <span className={`prompt-chevron${showTaskModel ? ' open' : ''}`}>&#9654;</span>
-            Task Model and Reasoning Settings
+            Task Model Settings
           </button>
 
-          {showTaskModel && taskModelCfg && (
+          {showTaskModel && (
             <div className="prompt-editor tok-opt-editor">
               <fieldset className="tok-opt-group">
                 <legend>Model per Task</legend>
@@ -1835,62 +1926,6 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </div>
               </fieldset>
 
-              <fieldset className="tok-opt-group">
-                <legend>Reasoning level per Task</legend>
-                <span className="form-hint">
-                  Leave as &quot;Use global reasoning level&quot; to inherit the setting above.
-                  Choose a specific level (including Provider default) to override it for that task only.
-                </span>
-                <div className="tok-opt-row">
-                  <label htmlFor="task-reasoning-scoring">Scoring reasoning</label>
-                  <select
-                    id="task-reasoning-scoring"
-                    className="form-input"
-                    value={taskModelCfg.scoring_reasoning_effort ?? ''}
-                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, scoring_reasoning_effort: e.target.value })}
-                    style={{ width: 220 }}
-                  >
-                    <option value="">Use global reasoning level</option>
-                    {reasoningOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <span className="form-hint">Applies to per-event scoring calls.</span>
-                </div>
-                <div className="tok-opt-row">
-                  <label htmlFor="task-reasoning-meta">Meta-analysis reasoning</label>
-                  <select
-                    id="task-reasoning-meta"
-                    className="form-input"
-                    value={taskModelCfg.meta_reasoning_effort ?? ''}
-                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, meta_reasoning_effort: e.target.value })}
-                    style={{ width: 220 }}
-                  >
-                    <option value="">Use global reasoning level</option>
-                    {reasoningOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <span className="form-hint">Applies to window summaries and findings.</span>
-                </div>
-                <div className="tok-opt-row">
-                  <label htmlFor="task-reasoning-rag">Ask AI reasoning</label>
-                  <select
-                    id="task-reasoning-rag"
-                    className="form-input"
-                    value={taskModelCfg.rag_reasoning_effort ?? ''}
-                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, rag_reasoning_effort: e.target.value })}
-                    style={{ width: 220 }}
-                  >
-                    <option value="">Use global reasoning level</option>
-                    {reasoningOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <span className="form-hint">Applies to the Ask AI answers.</span>
-                </div>
-              </fieldset>
-
               <div className="prompt-editor-actions">
                 <button
                   type="button"
@@ -1904,7 +1939,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                       const updated = await updateTaskModelConfig(taskModelCfg);
                       setTaskModelResp(updated);
                       setTaskModelCfg(updated.config);
-                      setTaskModelSuccess('Per-task model and reasoning settings saved. Takes effect on next pipeline run.');
+                      setTaskModelSuccess('Per-task model settings saved. Takes effect on next pipeline run.');
                     } catch (err: unknown) {
                       const msg = err instanceof Error ? err.message : String(err);
                       if (msg.includes('Authentication')) { onAuthError(); return; }

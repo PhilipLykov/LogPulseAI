@@ -228,7 +228,7 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 | **Scores** | `GET /api/v1/scores/systems`, `/stream` | Effective scores, SSE stream |
 | **Findings** | `GET /api/v1/systems/:id/findings` | AI findings with lifecycle |
 | **RAG** | `POST /api/v1/ask` | Natural language event queries |
-| **AI Config** | `GET/PUT /api/v1/ai-config`, `POST /api/v1/ai-config/resume-provider`, `/ai-prompts`, `/task-model-config` | Model, global and per-task reasoning level, prompts, provider health |
+| **AI Config** | `GET/PUT /api/v1/ai-config`, `POST /api/v1/ai-config/resume-provider`, `/ai-prompts`, `/task-model-config` | Model, global and per-task reasoning level, prompts, provider health; resume also reopens poisoned zero-score events |
 | **Alerting** | `GET/POST/PUT/DELETE /api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
 | **Scheduled Reports** | `GET/POST/PUT/DELETE /api/v1/scheduled-reports`, `POST /api/v1/scheduled-reports/:id/run-now` | Recurring report management and manual execution |
 | **Connectors** | `GET/POST/PUT/DELETE /api/v1/connectors`, `GET /api/v1/connectors/types` | External pull connector management |

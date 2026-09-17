@@ -774,7 +774,8 @@ Go to **Settings > AI Model** after login.
 |---------|-------------|-------------|
 | **Model** | LLM model name | `gpt-4o-mini` (cost), `gpt-5-mini` / `o3-mini` (reasoning) |
 | **Reasoning level** | How hard GPT-5 / o-series models think (`auto` … `max`) | `auto` (provider default); `low` for cheaper scoring |
-| **Per-task overrides** | Different model and/or reasoning level for scoring, meta-analysis, Ask AI | Inherit global unless you need a split |
+| **Reasoning level per task** | Separate scoring / meta-analysis / Ask AI levels on the same form | Inherit global unless you need a split |
+| **Per-task model overrides** | Different model names for scoring, meta-analysis, Ask AI | Inherit global unless you need a split |
 | **API Base URL** | For non-OpenAI (Ollama, LM Studio, Azure) | — |
 | **System Prompts** | Scoring, meta-analysis, RAG prompts | Edit to match your domain |
 | **Per-Criterion Prompts** | Individual instructions for each of the 6 criteria | Fine-tune for your environment |
@@ -927,6 +928,8 @@ docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 ### AI analysis stopped after the provider balance ran out
 
 If the LLM account reached zero credits, older versions of LogPulse AI stored failed scoring calls as zero scores and cached them. After you add credits, analysis can stay silent until those caches expire.
+
+**From v0.9.5-beta:** the first backend start (or **Resume now**) also reopens events from the last 7 days that were marked scored but have no positive scores, and removes synthetic “all routine” window results. The dashboard can then refill from live scoring. This is a one-time repair (`llm_quota_recovery_v2`).
 
 **From v0.9.2-beta:** quota errors pause analysis without marking events as scored. After you refill the balance, wait for the automatic retry shown under **Settings > AI Model**, or click **Resume now**. The backend also clears poisoned template caches on startup if it detects recent zero-token scoring runs.
 

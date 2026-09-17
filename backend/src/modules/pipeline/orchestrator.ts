@@ -112,7 +112,7 @@ export async function runPipeline(
       windowMinutes: options?.windowMinutes ?? pipeCfg.window_minutes,
     });
 
-    const pending = await getUnanalyzedWindows(db, { lookbackHours: 48, limit: 40 });
+    const pending = await getUnanalyzedWindows(db, { lookbackHours: 168, limit: 40 });
     const byId = new Map<string, { id: string; system_id: string; from_ts: string; to_ts: string }>();
     for (const w of [...windows, ...pending]) {
       byId.set(w.id, w);

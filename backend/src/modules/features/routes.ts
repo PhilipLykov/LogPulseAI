@@ -413,20 +413,26 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   );
 
   /**
-   * POST /api/v1/ai-config/resume-provider — clear a quota/auth pause and
-   * drop cached template scores so analysis retries immediately.
+   * POST /api/v1/ai-config/resume-provider — clear a quota/auth pause,
+   * drop cached template scores, and reopen poisoned zero-score events/windows.
    */
   app.post(
     '/api/v1/ai-config/resume-provider',
     { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       try {
-        const { health, cleared } = await resumeLlmProvider(db);
+        const { health, cleared, repair } = await resumeLlmProvider(db);
         await writeAuditLog(db, {
           actor_name: getActorName(request),
           action: 'ai_provider_resume',
           resource_type: 'ai_config',
-          details: { cleared_templates: cleared },
+          details: {
+            cleared_templates: cleared,
+            events_reopened: repair.eventsReopened,
+            es_events_reopened: repair.esEventsReopened,
+            windows_reopened: repair.windowsReopened,
+            repair_skipped: repair.skipped,
+          },
           ip: request.ip,
           user_id: request.currentUser?.id,
           session_id: request.currentSession?.id,
@@ -434,6 +440,10 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         return reply.send({
           provider_health: health,
           cleared_templates: cleared,
+          events_reopened: repair.eventsReopened,
+          es_events_reopened: repair.esEventsReopened,
+          windows_reopened: repair.windowsReopened,
+          repair_skipped: repair.skipped,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Failed to resume LLM provider: ${err.message}`);

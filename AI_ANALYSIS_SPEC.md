@@ -196,11 +196,12 @@ To keep LLM usage **predictable and low cost**, the system **must** implement:
 - A billing/quota error from the LLM provider is **not** a successful analysis. Events must remain **unscored** so they can be analysed after the balance is restored.
 - Do **not** write all-zero scores or cache them as “routine”. That permanently hides the window from later analysis.
 - Pause further LLM calls with a cooldown, then retry automatically. Surface the pause in the operator UI.
+- After a refill, recovery must also **reopen** events that were already marked scored with no positive scores, and must delete synthetic all-zero window results. Clearing the template cache alone leaves the dashboard at 0%.
 
 ### 7.5 Reasoning level
 
 - Reasoning models (GPT-5 / GPT-6 / o-series) accept a **reasoning level** (`reasoning_effort`) that trades token cost and latency against analysis depth.
-- The operator sets a **global** default in Settings. Scoring, meta-analysis, and Ask AI may each override it. Empty per-task values inherit the global default.
+- The operator sets a **global** default in Settings. Scoring, meta-analysis, and Ask AI may each override it on the same AI Model form. Empty per-task values inherit the global default.
 - Default is **auto** (the provider’s own default). The parameter is omitted for chat models such as `gpt-4o-mini`.
 
 ---

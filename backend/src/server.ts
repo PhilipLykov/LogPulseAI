@@ -28,7 +28,8 @@ async function main(): Promise<void> {
   // 1. Initialize database (run migrations + seeds)
   await initDb();
 
-  // Repair template caches poisoned by the old "failed LLM → write zeros" path.
+  // Repair template caches, scored_at zeros, and synthetic "routine" windows
+  // left by the old "failed LLM → write zeros" path.
   const db = getDb();
   await runQuotaPoisonRecovery(db);
 

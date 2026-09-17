@@ -330,8 +330,8 @@ export class PgEventSource implements EventSource {
     limit: number,
   ): Promise<LogEvent[]> {
     // Use scored_at column instead of expensive LEFT JOIN with event_scores.
-    // Also limit to recent events (last 48h) for partition pruning.
-    const recentCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // 7-day lookback matches the dashboard score window and quota-poison repair.
+    const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     let query = this.db('events')
       .whereNull('scored_at')

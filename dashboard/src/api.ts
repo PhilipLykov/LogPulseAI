@@ -735,6 +735,10 @@ export async function updateAiConfig(data: {
 export async function resumeAiProvider(): Promise<{
   provider_health: AiProviderHealth;
   cleared_templates: number;
+  events_reopened?: number;
+  es_events_reopened?: number;
+  windows_reopened?: number;
+  repair_skipped?: boolean;
 }> {
   return apiFetch('/api/v1/ai-config/resume-provider', { method: 'POST' });
 }

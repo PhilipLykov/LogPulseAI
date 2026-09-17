@@ -91,7 +91,8 @@ export async function getUnanalyzedWindows(
   db: Knex,
   options?: { lookbackHours?: number; limit?: number },
 ): Promise<Array<{ id: string; system_id: string; from_ts: string; to_ts: string }>> {
-  const lookbackHours = Math.max(1, Math.min(options?.lookbackHours ?? 48, 168));
+  // Default 7 days so quota-poisoned windows still retry after a refill.
+  const lookbackHours = Math.max(1, Math.min(options?.lookbackHours ?? 168, 168));
   const limit = Math.max(1, Math.min(options?.limit ?? 40, 200));
   const cutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString();
 

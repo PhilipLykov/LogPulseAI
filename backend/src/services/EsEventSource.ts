@@ -452,8 +452,8 @@ export class EsEventSource implements EventSource {
     const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
 
-    // Only look at last 48h to bound the search (aligned with PG getUnscoredEvents)
-    const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // 7-day lookback matches PG getUnscoredEvents and the dashboard score window
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     filter.push({ range: { [this.esField('timestamp')]: { gte: since } } });
 
     // Fetch metadata for this system: events that are acknowledged OR already scored
