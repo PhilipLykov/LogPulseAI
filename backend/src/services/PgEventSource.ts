@@ -358,7 +358,7 @@ export class PgEventSource implements EventSource {
       .where({ system_id: systemId })
       .where('timestamp', '>=', fromTs)
       .where('timestamp', '<', toTs)
-      .select('id', 'message', 'severity', 'template_id', 'acknowledged_at')
+      .select('id', 'message', 'severity', 'template_id', 'acknowledged_at', 'scored_at')
       .orderBy('timestamp', 'asc');
 
     if (opts?.limit) query = query.limit(opts.limit);

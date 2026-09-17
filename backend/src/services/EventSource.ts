@@ -31,6 +31,7 @@ export interface LogEvent {
   acknowledged_at?: string | null;
   template_id?: string | null;
   normalized_hash?: string;
+  scored_at?: string | null;
 }
 
 /** Filters for paginated event search. */

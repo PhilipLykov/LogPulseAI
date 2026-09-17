@@ -8,6 +8,7 @@ import { generateComplianceExport, type ExportParams } from './exportCompliance.
 import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, resolveCriterionGuidelines, invalidateAiConfigCache, invalidateCriterionGuidelinesCache } from '../llm/aiConfig.js';
 import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT, DEFAULT_CRITERION_GUIDELINES, buildScoringPrompt } from '../llm/adapter.js';
+import { getLlmHealth, resumeLlmProvider } from '../llm/llmCircuit.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
 import {
   loadBackupConfig,
@@ -261,12 +262,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         ? `${cfg.apiKey.slice(0, 3)}${'*'.repeat(Math.max(0, cfg.apiKey.length - 7))}${cfg.apiKey.slice(-4)}`
         : '';
 
+      const health = await getLlmHealth(db);
+
       return reply.send({
         model: cfg.model,
         base_url: cfg.baseUrl,
         api_key_set: keySet,
         api_key_hint: hint,
         api_key_source: apiKeySource,
+        provider_health: health,
       });
     },
   );
@@ -338,6 +342,17 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       // Flush cache so next pipeline run picks up new values
       invalidateAiConfigCache();
 
+      if (api_key !== undefined && api_key !== '' && api_key !== null) {
+        try {
+          const currentHealth = await getLlmHealth(db);
+          if (currentHealth.state === 'paused' || (currentHealth.consecutive_failures || 0) > 0) {
+            await resumeLlmProvider(db);
+          }
+        } catch (err: any) {
+          app.log.warn(`[${localTimestamp()}] Could not reset LLM pause after API key update: ${err.message}`);
+        }
+      }
+
       await writeAuditLog(db, {
         actor_name: getActorName(request),
         action: 'ai_config_update',
@@ -357,12 +372,45 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         ? `${cfg.apiKey.slice(0, 3)}${'*'.repeat(Math.max(0, cfg.apiKey.length - 7))}${cfg.apiKey.slice(-4)}`
         : '';
 
+      const health = await getLlmHealth(db);
+
       return reply.send({
         model: cfg.model,
         base_url: cfg.baseUrl,
         api_key_set: keySet,
         api_key_hint: hint,
+        provider_health: health,
       });
+    },
+  );
+
+  /**
+   * POST /api/v1/ai-config/resume-provider — clear a quota/auth pause and
+   * drop cached template scores so analysis retries immediately.
+   */
+  app.post(
+    '/api/v1/ai-config/resume-provider',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
+    async (request, reply) => {
+      try {
+        const { health, cleared } = await resumeLlmProvider(db);
+        await writeAuditLog(db, {
+          actor_name: getActorName(request),
+          action: 'ai_provider_resume',
+          resource_type: 'ai_config',
+          details: { cleared_templates: cleared },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+        return reply.send({
+          provider_health: health,
+          cleared_templates: cleared,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to resume LLM provider: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to resume the AI provider.' });
+      }
     },
   );
 

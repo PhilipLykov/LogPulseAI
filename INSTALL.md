@@ -922,6 +922,12 @@ docker compose exec backend sh -lc "cat /app/bootstrap-secrets.txt"
 - Settings > AI Model > Token Optimization: enable caching, severity filtering, batch sizing
 - Switch to `gpt-4o-mini` if using a more expensive model
 
+### AI analysis stopped after the provider balance ran out
+
+If the LLM account reached zero credits, older versions of LogPulse AI stored failed scoring calls as zero scores and cached them. After you add credits, analysis can stay silent until those caches expire.
+
+**From v0.9.2-beta:** quota errors pause analysis without marking events as scored. After you refill the balance, wait for the automatic retry shown under **Settings > AI Model**, or click **Resume now**. The backend also clears poisoned template caches on startup if it detects recent zero-token scoring runs.
+
 ### Backup fails with "Permission denied"
 
 Docker: the entrypoint script automatically fixes permissions. If issues persist:

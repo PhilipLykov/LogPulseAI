@@ -5,10 +5,11 @@ import { type LlmAdapter, OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { recalcEffectiveScores } from '../events/recalcScores.js';
 import { runPerEventScoringJob } from './scoringJob.js';
-import { createWindows } from './windowing.js';
-import { metaAnalyzeWindow } from './metaAnalyze.js';
+import { createWindows, getUnanalyzedWindows } from './windowing.js';
+import { metaAnalyzeWindow, WindowNotReadyError } from './metaAnalyze.js';
 import { evaluateAlerts } from '../alerting/evaluator.js';
 import { runGroupingEngine } from '../discovery/groupingEngine.js';
+import { getLlmHealth, isLlmPaused } from '../llm/llmCircuit.js';
 
 /** Load pipeline config from app_config, falling back to defaults. */
 async function loadPipelineConfig(db: Knex): Promise<{
@@ -83,6 +84,15 @@ export async function runPipeline(
       normalizeSql: pipeCfg.normalize_sql_statements,
     });
 
+    if (scoringResult.llmPaused) {
+      const health = await getLlmHealth(db);
+      logger.warn(
+        `[${localTimestamp()}] Pipeline: skipping windowing and meta-analysis while LLM is paused` +
+        `${health.pause_until ? ` until ${health.pause_until}` : ''}.`,
+      );
+      return { scored: scoringResult.scored, windows: 0, analyzed: 0 };
+    }
+
     // 1b. Propagate new event scores into existing effective_scores
     if (scoringResult.scored > 0) {
       try {
@@ -97,16 +107,32 @@ export async function runPipeline(
       windowMinutes: options?.windowMinutes ?? pipeCfg.window_minutes,
     });
 
-    // 3. Meta-analyze each new window, track which succeed
+    const pending = await getUnanalyzedWindows(db, { lookbackHours: 48, limit: 40 });
+    const byId = new Map<string, { id: string; system_id: string; from_ts: string; to_ts: string }>();
+    for (const w of [...windows, ...pending]) {
+      byId.set(w.id, w);
+    }
+    const toAnalyze = [...byId.values()];
+
+    // 3. Meta-analyze each new or previously unfinished window
     const analyzedWindows: typeof windows = [];
-    for (const w of windows) {
+    for (const w of toAnalyze) {
       try {
         await metaAnalyzeWindow(db, llm, w.id, {
           wMeta: options?.wMeta ?? pipeCfg.effective_score_meta_weight,
         });
         analyzedWindows.push(w);
       } catch (err) {
+        if (err instanceof WindowNotReadyError) {
+          logger.info(`[${localTimestamp()}] Meta-analyze deferred for window ${w.id}: ${err.message}`);
+          continue;
+        }
         logger.error(`[${localTimestamp()}] Meta-analyze failed for window ${w.id}:`, err);
+      }
+      const healthAfter = await getLlmHealth(db);
+      if (isLlmPaused(healthAfter)) {
+        logger.warn(`[${localTimestamp()}] Pipeline: LLM paused during meta-analysis, stopping further windows this run.`);
+        break;
       }
     }
 
@@ -170,7 +196,34 @@ export function startPipelineScheduler(
         return;
       }
 
+      const health = await getLlmHealth(db);
+      if (isLlmPaused(health)) {
+        const until = health.pause_until ? Date.parse(health.pause_until) : NaN;
+        const delay = Number.isFinite(until)
+          ? Math.max(5_000, until - Date.now() + 1_000)
+          : 60_000;
+        logger.warn(
+          `[${localTimestamp()}] Pipeline tick skipped: LLM provider paused` +
+          `${health.reason ? ` (${health.reason})` : ''} until ${health.pause_until}. ` +
+          `Retrying in ${Math.round(delay / 1000)}s.`,
+        );
+        void scheduleIn(delay);
+        return;
+      }
+
       const result = await runPipeline(db, llm);
+      const healthAfter = await getLlmHealth(db);
+      if (isLlmPaused(healthAfter)) {
+        const until = healthAfter.pause_until ? Date.parse(healthAfter.pause_until) : NaN;
+        const delay = Number.isFinite(until)
+          ? Math.max(5_000, until - Date.now() + 1_000)
+          : 60_000;
+        logger.warn(
+          `[${localTimestamp()}] Pipeline: LLM paused during this run; retrying in ${Math.round(delay / 1000)}s.`,
+        );
+        void scheduleIn(delay);
+        return;
+      }
       const hadActivity = result.scored > 0 || result.analyzed > 0;
       void scheduleNext(hadActivity);
     } catch (err) {
@@ -179,6 +232,11 @@ export function startPipelineScheduler(
     } finally {
       running = false;
     }
+  }
+
+  function scheduleIn(ms: number) {
+    if (stopped) return;
+    currentTimer = setTimeout(tick, ms);
   }
 
   async function scheduleNext(hadActivity: boolean) {

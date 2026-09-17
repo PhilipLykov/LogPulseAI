@@ -81,3 +81,27 @@ export async function createWindows(
 
   return created;
 }
+
+/**
+ * Windows that have events but no meta_results yet.
+ * Used to retry analysis after a scoring/provider failure — createWindows only
+ * returns newly inserted rows, so a failed meta pass would otherwise be lost.
+ */
+export async function getUnanalyzedWindows(
+  db: Knex,
+  options?: { lookbackHours?: number; limit?: number },
+): Promise<Array<{ id: string; system_id: string; from_ts: string; to_ts: string }>> {
+  const lookbackHours = Math.max(1, Math.min(options?.lookbackHours ?? 48, 168));
+  const limit = Math.max(1, Math.min(options?.limit ?? 40, 200));
+  const cutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString();
+
+  const rows = await db('windows as w')
+    .leftJoin('meta_results as m', 'm.window_id', 'w.id')
+    .whereNull('m.id')
+    .where('w.to_ts', '>=', cutoff)
+    .orderBy('w.from_ts', 'asc')
+    .limit(limit)
+    .select('w.id', 'w.system_id', 'w.from_ts', 'w.to_ts');
+
+  return rows;
+}

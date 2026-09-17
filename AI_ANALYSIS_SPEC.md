@@ -191,6 +191,12 @@ To keep LLM usage **predictable and low cost**, the system **must** implement:
   - Number of tokens (or API calls) per hour/day.
   - Configurable limits or alerts when thresholds are exceeded.
 
+### 7.4 Provider quota and billing failures
+
+- A billing/quota error from the LLM provider is **not** a successful analysis. Events must remain **unscored** so they can be analysed after the balance is restored.
+- Do **not** write all-zero scores or cache them as “routine”. That permanently hides the window from later analysis.
+- Pause further LLM calls with a cooldown, then retry automatically. Surface the pause in the operator UI.
+
 ---
 
 ## 8. Integration with the Rest of the System

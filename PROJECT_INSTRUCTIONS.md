@@ -97,10 +97,18 @@
 
 ---
 
+## Instruction 12 (LLM provider quota recovery)
+
+- If the AI provider balance is exhausted, analysis must **pause** and leave events **unscored**. It must **not** store failed LLM calls as zero scores or cache them as routine.
+- After the operator refills the balance, analysis must **resume automatically** (cooldown then retry) without a manual restart. Settings must show the pause and offer **Resume now**.
+- Quota HTTP 429 (`insufficient_quota`) is **not** a rate limit and must not be retried as if it were.
+
+---
+
 ## Meta-rule for assistants
 
 - **At the start of any work on this project:** Read **PROJECT_INSTRUCTIONS.md** and **AI_ANALYSIS_SPEC.md** to align with the user’s requirements, the 6 analysis criteria, and the cost-control measures (deduplication, preprocessing, cost observability).
 
 ---
 
-*Last updated: 2026-02-06. Append new instructions below in order; do not remove or reorder existing ones.*
+*Last updated: 2026-09-17. Append new instructions below in order; do not remove or reorder existing ones.*

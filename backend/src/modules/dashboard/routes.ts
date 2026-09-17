@@ -14,6 +14,7 @@ import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
 import { DEFAULT_W_META } from '../events/recalcScores.js';
 import { queueEffectiveScoreRecalc } from '../events/recalcQueue.js';
 import { runPerEventScoringJob } from '../pipeline/scoringJob.js';
+import { classifyLlmException, isLlmRequestError } from '../llm/llmErrors.js';
 
 /** In-memory tracker for background re-evaluate jobs. */
 const reEvalJobs = new Map<string, {
@@ -637,7 +638,26 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
               `[${localTimestamp()}] Re-evaluate [${systemName}]: scoring done in ${Date.now() - t0}ms ` +
               `(scored=${scoringResult.scored}, templates=${scoringResult.templates})`,
             );
+            if (scoringResult.llmPaused) {
+              reEvalJobs.set(jobId, {
+                status: 'error',
+                error:
+                  'The AI provider is paused because the account has no remaining credits or the API key was rejected. Restore the balance or update the key, then retry.',
+                startedAt: Date.now(),
+              });
+              return;
+            }
           } catch (err: any) {
+            const classified = isLlmRequestError(err) ? err : classifyLlmException(err);
+            if (classified.kind === 'quota' || classified.kind === 'auth') {
+              reEvalJobs.set(jobId, {
+                status: 'error',
+                error: classified.userMessage,
+                startedAt: Date.now(),
+              });
+              logger.warn(`[${localTimestamp()}] Re-evaluate aborted (${classified.kind}): ${classified.message}`);
+              return;
+            }
             logger.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
           }
 
@@ -716,11 +736,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             },
           });
         } catch (err: any) {
+          const classified = isLlmRequestError(err) ? err : null;
           logger.error(`[${localTimestamp()}] Re-evaluate background job failed: ${err.message}`);
           reEvalJobs.set(jobId, {
             status: 'error',
             startedAt: reEvalJobs.get(jobId)!.startedAt,
-            error: err.message || 'Re-evaluation failed.',
+            error: classified?.userMessage || err.message || 'Re-evaluation failed.',
           });
         }
       });

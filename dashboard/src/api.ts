@@ -688,12 +688,23 @@ export async function deleteSource(id: string): Promise<void> {
 
 // ── AI Configuration ─────────────────────────────────────────
 
+export interface AiProviderHealth {
+  state: 'ok' | 'paused';
+  reason: 'quota' | 'rate_limit' | 'auth' | 'timeout' | 'transient' | 'unknown' | null;
+  message: string;
+  pause_until: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
+  recovered_at: string | null;
+}
+
 export interface AiConfigResponse {
   model: string;
   base_url: string;
   api_key_set: boolean;
   api_key_hint: string;
   api_key_source: 'database' | 'environment' | 'none';
+  provider_health?: AiProviderHealth;
 }
 
 export async function fetchAiConfig(): Promise<AiConfigResponse> {
@@ -709,6 +720,13 @@ export async function updateAiConfig(data: {
     method: 'PUT',
     body: JSON.stringify(data),
   });
+}
+
+export async function resumeAiProvider(): Promise<{
+  provider_health: AiProviderHealth;
+  cleared_templates: number;
+}> {
+  return apiFetch('/api/v1/ai-config/resume-provider', { method: 'POST' });
 }
 
 // ── AI System Prompts ────────────────────────────────────────

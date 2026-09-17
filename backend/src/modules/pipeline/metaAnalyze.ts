@@ -20,10 +20,20 @@ import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivac
 import { getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents, matchesNormalBehavior } from './normalBehavior.js';
 import { logger } from '../../config/logger.js';
+import { classifyLlmException, shouldPausePipeline } from '../llm/llmErrors.js';
+import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
 
 import { DEFAULT_W_META } from '../events/recalcScores.js';
 /** Default number of previous window summaries to include as context. */
 const DEFAULT_CONTEXT_WINDOW_SIZE = 5;
+
+/** Thrown when a window cannot be analysed yet (events still unscored). */
+export class WindowNotReadyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WindowNotReadyError';
+  }
+}
 
 // ── Meta-analysis configuration defaults ───────────────────────
 
@@ -233,6 +243,16 @@ export async function metaAnalyzeWindow(
     });
 
     return;
+  }
+
+  // If any event in the window has not been scored yet, skip without writing
+  // meta_results. Otherwise the O1 "all zero" path would store a fake "routine"
+  // analysis that is never retried after the provider recovers.
+  const unscoredInWindow = events.filter((e: any) => !e.scored_at);
+  if (unscoredInWindow.length > 0) {
+    throw new WindowNotReadyError(
+      `Window ${windowId} has ${unscoredInWindow.length}/${events.length} unscored events; deferring meta-analysis`,
+    );
   }
 
   // ── Gather per-event scores ─────────────────────────────
@@ -645,25 +665,17 @@ export async function metaAnalyzeWindow(
         modelOverride: taskModels.meta_model || undefined,
       },
     ));
+    await recordLlmSuccess(db);
   } catch (err) {
+    const classified = classifyLlmException(err);
     logger.error(
       `[${localTimestamp()}] LLM meta-analysis failed for window ${windowId} ` +
-      `(system=${system.name}): ${err instanceof Error ? err.message : err}`,
+      `(system=${system.name}, kind=${classified.kind}): ${classified.message}`,
     );
-    // Write zero effective scores so the dashboard reflects this window consistently
-    const nowIso = new Date().toISOString();
-    for (const criterion of CRITERIA) {
-      await db.raw(`
-        INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
-        VALUES (?, ?, ?, 0, 0, 0, ?)
-        ON CONFLICT (window_id, system_id, criterion_id)
-        DO UPDATE SET effective_value = 0,
-                      meta_score = 0,
-                      max_event_score = 0,
-                      updated_at = EXCLUDED.updated_at
-      `, [windowId, system.id, criterion.id, nowIso]);
+    if (shouldPausePipeline(classified.kind)) {
+      await recordLlmFailure(db, classified);
     }
-    return;
+    throw classified;
   }
 
   // ── Finding deduplication (post-LLM safety net) ─────────

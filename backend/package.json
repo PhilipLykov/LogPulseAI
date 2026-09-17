@@ -1,6 +1,6 @@
 {
   "name": "logpulse-ai-backend",
-  "version": "0.9.1-beta",
+  "version": "0.9.2-beta",
   "description": "AI Log Audit and Analysis Solution - Backend",
   "private": true,
   "type": "module",
@@ -12,7 +12,8 @@
     "migrate:rollback": "tsx node_modules/.bin/knex migrate:rollback --knexfile knexfile.ts",
     "seed": "tsx node_modules/.bin/knex seed:run --knexfile knexfile.ts",
     "db:setup": "npm run migrate && npm run seed",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/modules/llm/llmErrors.test.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.3.1",

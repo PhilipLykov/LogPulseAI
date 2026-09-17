@@ -5,6 +5,15 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2-beta] - 2026-09-17
+
+### Fixed
+- **AI analysis stayed silent after provider credit refill**: When the LLM provider returned a quota/billing error (typically HTTP 429 `insufficient_quota`), scoring converted the failure into all-zero scores, wrote them into the template cache, and marked events as already scored. Meta-analysis then treated the window as routine and never retried. After the balance was restored, those events and templates were still treated as analysed. Failures are no longer stored as scores; quota and auth errors pause the pipeline until a cooldown, then retry automatically; unanalysed windows are retried; poisoned template caches are cleared on recovery and on upgrade.
+
+### Added
+- **Provider health in Settings → AI Model**: Shows when analysis is paused for quota or a rejected API key, with an automatic retry time and a **Resume now** action that clears the pause and cached scores
+- **`POST /api/v1/ai-config/resume-provider`**: Operator endpoint to resume scoring immediately after refilling credits
+
 ## [0.9.1-beta] - 2026-05-17
 
 ### Security

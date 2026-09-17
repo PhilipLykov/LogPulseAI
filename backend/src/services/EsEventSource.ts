@@ -768,9 +768,9 @@ export class EsEventSource implements EventSource {
     const metaRows = await this.db('es_event_metadata')
       .where({ system_id: this.systemId })
       .whereIn('es_event_id', eventIds)
-      .select('es_event_id', 'acknowledged_at', 'template_id');
+      .select('es_event_id', 'acknowledged_at', 'template_id', 'scored_at');
 
-    const metaMap = new Map<string, { acknowledged_at?: string | null; template_id?: string | null }>();
+    const metaMap = new Map<string, { acknowledged_at?: string | null; template_id?: string | null; scored_at?: string | null }>();
     for (const row of metaRows) {
       metaMap.set(row.es_event_id, row);
     }
@@ -780,6 +780,7 @@ export class EsEventSource implements EventSource {
       if (meta) {
         event.acknowledged_at = meta.acknowledged_at;
         event.template_id = meta.template_id;
+        event.scored_at = meta.scored_at;
       }
     }
   }

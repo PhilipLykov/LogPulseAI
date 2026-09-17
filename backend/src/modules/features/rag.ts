@@ -5,6 +5,8 @@ import { localTimestamp } from '../../config/index.js';
 import { resolveAiConfig, resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
 import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
+import { classifyLlmHttpError, shouldPausePipeline } from '../llm/llmErrors.js';
+import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
 
 /**
  * RAG-style natural language query endpoint.
@@ -305,10 +307,13 @@ export async function askQuestion(
   }
 
   if (!res.ok) {
-    // Don't leak raw error details to the client
     const errorText = await res.text();
-    logger.error(`[${localTimestamp()}] RAG LLM error ${res.status}: ${errorText}`);
-    throw new Error('Failed to process your question. Please try again later.');
+    const classified = classifyLlmHttpError(res.status, errorText);
+    logger.error(`[${localTimestamp()}] RAG LLM error ${res.status} (${classified.kind}): ${errorText}`);
+    if (shouldPausePipeline(classified.kind)) {
+      await recordLlmFailure(db, classified);
+    }
+    throw new Error(classified.userMessage);
   }
 
   let data: any;
@@ -319,6 +324,10 @@ export async function askQuestion(
     throw new Error('Failed to process your question. Please try again later.');
   }
   const answer = data.choices?.[0]?.message?.content ?? 'Unable to generate an answer.';
+
+  try {
+    await recordLlmSuccess(db);
+  } catch { /* health update must not fail the answer */ }
 
   // ── O6: Track RAG LLM usage in llm_usage table ───────────
   try {

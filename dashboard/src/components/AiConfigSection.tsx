@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { NumericInput } from './NumericInput';
+import { formatEuDateTime } from '../utils/dateTime';
 import {
-  type AiConfigResponse, fetchAiConfig, updateAiConfig,
+  type AiConfigResponse, fetchAiConfig, updateAiConfig, resumeAiProvider,
   type AiPromptsResponse, fetchAiPrompts, updateAiPrompts,
   type AckConfigResponse, fetchAckConfig, updateAckConfig,
   type TokenOptimizationConfig, type TokenOptResponse,
@@ -67,6 +68,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [tokSuccess, setTokSuccess] = useState('');
   const [tokError, setTokError] = useState('');
   const [invalidating, setInvalidating] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   // Meta-analysis tuning state
   const [metaAnalysis, setMetaAnalysis] = useState<MetaAnalysisConfigResponse | null>(null);
@@ -206,6 +208,25 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
     }
   };
 
+  const handleResumeProvider = async () => {
+    setError('');
+    setSuccess('');
+    setResuming(true);
+    try {
+      const result = await resumeAiProvider();
+      setConfig((prev) => prev ? { ...prev, provider_health: result.provider_health } : prev);
+      setSuccess(
+        `AI provider pause cleared. ${result.cleared_templates} cached template scores were dropped so the next pipeline run will score events again.`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthError(); return; }
+      setError(msg);
+    } finally {
+      setResuming(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="ai-config-section">
@@ -223,6 +244,36 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
           Changes take effect on the next pipeline cycle (no restart required).
         </p>
       </div>
+
+      {config?.provider_health?.state === 'paused' && (
+        <div className="ai-provider-health paused" role="status">
+          <strong>
+            {config.provider_health.reason === 'quota'
+              ? 'AI analysis paused: provider credits or quota exhausted'
+              : config.provider_health.reason === 'auth'
+                ? 'AI analysis paused: API key rejected'
+                : 'AI analysis paused'}
+          </strong>
+          <p>
+            {config.provider_health.message ||
+              'The last AI provider call failed. Events are left unscored until the provider accepts requests again.'}
+          </p>
+          {config.provider_health.pause_until && (
+            <p>
+              Automatic retry: {formatEuDateTime(config.provider_health.pause_until, { includeSeconds: false })}.
+              After you refill the balance, wait for that time or click Resume now.
+            </p>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm btn-outline"
+            onClick={() => { void handleResumeProvider(); }}
+            disabled={resuming}
+          >
+            {resuming ? 'Resuming…' : 'Resume now'}
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="error-msg" role="alert">

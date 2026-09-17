@@ -2314,6 +2314,31 @@ input:focus-visible,
   color: var(--red);
 }
 
+.ai-provider-health {
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.ai-provider-health.paused {
+  background: rgba(250, 204, 21, 0.08);
+  border: 1px solid var(--yellow);
+  color: var(--text);
+}
+
+.ai-provider-health.paused strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--yellow);
+}
+
+.ai-provider-health.paused p {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+}
+
 .ai-key-hint {
   font-family: monospace;
   font-size: 0.8rem;

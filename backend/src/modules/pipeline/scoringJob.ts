@@ -11,6 +11,17 @@ import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFil
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents } from './normalBehavior.js';
 import { logger } from '../../config/logger.js';
+import {
+  classifyLlmException,
+  shouldPausePipeline,
+} from '../llm/llmErrors.js';
+import {
+  getLlmHealth,
+  isLlmPaused,
+  recordLlmFailure,
+  recordLlmSuccess,
+  invalidateTemplateScoreCache,
+} from '../llm/llmCircuit.js';
 
 // ── Token Optimization config type ──────────────────────────
 export interface TokenOptimizationConfig {
@@ -141,12 +152,33 @@ export async function runPerEventScoringJob(
   db: Knex,
   llm: LlmAdapter,
   options?: { chunkSize?: number; systemId?: string; normalizeSql?: boolean },
-): Promise<{ scored: number; templates: number; errors: number }> {
+): Promise<{ scored: number; templates: number; errors: number; llmPaused: boolean }> {
   const chunkSize = options?.chunkSize ?? DEFAULT_CHUNK_SIZE;
   const normalizeSql = options?.normalizeSql ?? false;
   const jobStart = Date.now();
 
   logger.debug(`[${localTimestamp()}] Per-event scoring job started (chunkSize=${chunkSize})`);
+
+  const health = await getLlmHealth(db);
+  if (isLlmPaused(health)) {
+    logger.warn(
+      `[${localTimestamp()}] Per-event scoring skipped: LLM provider paused` +
+      `${health.reason ? ` (${health.reason})` : ''} until ${health.pause_until}. ` +
+      `Events remain unscored so they can be analysed after the balance/key is restored.`,
+    );
+    return { scored: 0, templates: 0, errors: 0, llmPaused: true };
+  }
+
+  if (health.state === 'paused' || (health.consecutive_failures || 0) > 0) {
+    try {
+      const cleared = await invalidateTemplateScoreCache(db);
+      logger.info(
+        `[${localTimestamp()}] LLM probe run: cleared ${cleared} cached template scores before retrying the provider.`,
+      );
+    } catch (err: any) {
+      logger.warn(`[${localTimestamp()}] LLM probe cache clear failed: ${err.message}`);
+    }
+  }
 
   // ── Load configs (once per job) ─────────────────────────
   const customPrompts = await resolveCustomPrompts(db);
@@ -188,6 +220,7 @@ export async function runPerEventScoringJob(
   let totalRequests = 0;
   let usedModel = '';
   let iterations = 0;
+  let llmPaused = false;
 
   // ── Main loop: keep processing until all events are scored ──
   while (true) {
@@ -374,12 +407,14 @@ export async function runPerEventScoringJob(
     const freshScores = new Map<string, ScoreResult>();
 
     for (let i = 0; i < needsScoring.length; i += batchSize) {
+      if (llmPaused) break;
       const batch = needsScoring.slice(i, i + batchSize);
       const systemIds = [...new Set(
         batch.map((r) => r.systemId).filter((id): id is string => id !== null && id !== undefined && id !== ''),
       )];
 
       for (const systemId of systemIds) {
+        if (llmPaused) break;
         const systemBatch = batch.filter((r) => r.systemId === systemId);
         if (systemBatch.length === 0) continue;
 
@@ -407,6 +442,8 @@ export async function runPerEventScoringJob(
               modelOverride: taskModels.scoring_model || undefined,
             },
           );
+
+          await recordLlmSuccess(db);
 
           totalTokenInput += usage.token_input;
           totalTokenOutput += usage.token_output;
@@ -437,8 +474,16 @@ export async function runPerEventScoringJob(
             }
           }
         } catch (err) {
-          logger.error(`[${localTimestamp()}] Per-event scoring error for system ${systemId}:`, err);
+          const classified = classifyLlmException(err);
+          logger.error(
+            `[${localTimestamp()}] Per-event scoring error for system ${systemId} (${classified.kind}): ${classified.message}`,
+          );
           totalErrors += systemBatch.length;
+          if (shouldPausePipeline(classified.kind)) {
+            await recordLlmFailure(db, classified);
+            llmPaused = true;
+            break;
+          }
         }
       }
     }
@@ -472,6 +517,9 @@ export async function runPerEventScoringJob(
     totalTemplates += representatives.length;
     iterations++;
 
+    // Quota/auth pause: stop consuming further chunks so events stay unscored.
+    if (llmPaused) break;
+
     // If the DB returned fewer events than requested, the backlog is exhausted
     if (fetchedCount < chunkSize) break;
   }
@@ -498,7 +546,7 @@ export async function runPerEventScoringJob(
     `tokens=${totalTokenInput + totalTokenOutput}`,
   );
 
-  return { scored: totalScored, templates: totalTemplates, errors: totalErrors };
+  return { scored: totalScored, templates: totalTemplates, errors: totalErrors, llmPaused };
 }
 
 /**

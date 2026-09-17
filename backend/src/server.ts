@@ -6,6 +6,7 @@ import { getDb } from './db/index.js';
 import { buildApp } from './app.js';
 import { OpenAiAdapter } from './modules/llm/adapter.js';
 import { startPipelineScheduler } from './modules/pipeline/orchestrator.js';
+import { runQuotaPoisonRecovery } from './modules/llm/llmCircuit.js';
 import { startConnectorScheduler } from './modules/connectors/runner.js';
 import { startMaintenanceScheduler } from './modules/maintenance/maintenanceJob.js';
 import { startScheduledReportScheduler } from './modules/alerting/scheduledReports.js';
@@ -27,8 +28,11 @@ async function main(): Promise<void> {
   // 1. Initialize database (run migrations + seeds)
   await initDb();
 
-  // 2. Ensure at least one admin API key exists + bootstrap admin user
+  // Repair template caches poisoned by the old "failed LLM → write zeros" path.
   const db = getDb();
+  await runQuotaPoisonRecovery(db);
+
+  // 2. Ensure at least one admin API key exists + bootstrap admin user
   await ensureAdminKey(db, config.adminApiKey || undefined);
   await ensureAdminUser(db);
 

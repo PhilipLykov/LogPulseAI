@@ -1,6 +1,7 @@
 import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { CRITERIA_SLUGS, type CriterionSlug, type MetaScores } from '../../types/index.js';
+import { classifyLlmException, classifyLlmHttpError } from './llmErrors.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -482,13 +483,11 @@ export class OpenAiAdapter implements LlmAdapter {
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_SCORE_SYSTEM_PROMPT;
 
-    const effectiveScoringModel = (options?.modelOverride?.trim()) || this.model;
-    let scores: ScoreResult[];
-    let usage: LlmUsageInfo;
-    try {
-      const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
-      usage = response.usage;
+    const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
+    const usage = response.usage;
 
+    let scores: ScoreResult[];
+    try {
       const jsonContent = extractJson(response.content);
       const parsed = JSON.parse(jsonContent);
       // Handle both {"scores": [...]} and direct array (if provider doesn't use json_object)
@@ -507,10 +506,12 @@ export class OpenAiAdapter implements LlmAdapter {
         scores = scores.slice(0, events.length);
       }
     } catch (err) {
-      logger.error(`[${localTimestamp()}] LLM scoring failed:`, err);
-      // Return zero scores rather than crash the pipeline
-      scores = events.map(() => emptyScoreResult());
-      usage = { model: effectiveScoringModel, token_input: 0, token_output: 0, request_count: 1 };
+      const classified = classifyLlmException(err);
+      logger.error(`[${localTimestamp()}] LLM scoring failed (${classified.kind}): ${classified.message}`);
+      // Do not convert failures into zero scores. Zero scores were previously
+      // written to the DB and template cache, so after a quota refill the
+      // pipeline believed events were already analysed.
+      throw classified;
     }
 
     return { scores, usage };
@@ -632,8 +633,9 @@ export class OpenAiAdapter implements LlmAdapter {
     try {
       response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
     } catch (err) {
-      logger.error(`[${localTimestamp()}] LLM meta-analysis network/API error:`, err);
-      throw new Error(`Meta-analysis LLM call failed: ${(err as Error).message}`);
+      const classified = classifyLlmException(err);
+      logger.error(`[${localTimestamp()}] LLM meta-analysis network/API error (${classified.kind}): ${classified.message}`);
+      throw classified;
     }
 
     try {
@@ -736,7 +738,6 @@ export class OpenAiAdapter implements LlmAdapter {
   }
 
   private static readonly REQUEST_TIMEOUT_MS = 120_000;
-  private static readonly RETRYABLE_CODES = new Set([429, 502, 503, 504]);
 
   private async chatCompletion(
     systemPrompt: string,
@@ -778,15 +779,17 @@ export class OpenAiAdapter implements LlmAdapter {
 
         if (!res.ok) {
           const errorText = await res.text();
-          if (attempt < maxAttempts && OpenAiAdapter.RETRYABLE_CODES.has(res.status)) {
+          const classified = classifyLlmHttpError(res.status, errorText);
+          if (attempt < maxAttempts && classified.retryable) {
             logger.warn(
-              `[${localTimestamp()}] LLM API ${res.status} (attempt ${attempt}/${maxAttempts}), retrying in 2s`,
+              `[${localTimestamp()}] LLM API ${res.status}/${classified.kind} ` +
+              `(attempt ${attempt}/${maxAttempts}), retrying in 2s`,
             );
-            lastError = new Error(`OpenAI API error ${res.status}: ${errorText}`);
+            lastError = classified;
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
-          throw new Error(`OpenAI API error ${res.status}: ${errorText}`);
+          throw classified;
         }
 
         const data = await res.json() as any;
@@ -803,21 +806,16 @@ export class OpenAiAdapter implements LlmAdapter {
 
         return { content: content || '{}', usage };
       } catch (err: any) {
-        if (err.name === 'AbortError') {
-          lastError = new Error(`LLM request timed out after ${OpenAiAdapter.REQUEST_TIMEOUT_MS / 1000}s`);
-        } else {
-          lastError = err;
-        }
-        const isRetryable = err.name === 'AbortError' ||
-          (lastError?.message && /\b(429|502|503|504)\b/.test(lastError.message));
-        if (isRetryable && attempt < maxAttempts) {
+        const classified = classifyLlmException(err);
+        lastError = classified;
+        if (classified.retryable && attempt < maxAttempts) {
           logger.warn(
-            `[${localTimestamp()}] LLM request failed (attempt ${attempt}/${maxAttempts}): ${lastError!.message}, retrying in 2s`,
+            `[${localTimestamp()}] LLM request failed (attempt ${attempt}/${maxAttempts}): ${classified.message}, retrying in 2s`,
           );
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        throw lastError!;
+        throw classified;
       } finally {
         clearTimeout(timer);
       }
