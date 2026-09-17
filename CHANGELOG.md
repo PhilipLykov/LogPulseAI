@@ -5,6 +5,11 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8-beta] - 2026-09-18
+
+### Added
+- **GPT-5.6 alias pricing**: `gpt-5.6` (OpenAI’s name for Sol) and Daybreak Blue/Red ids now use the published Sol/Cyber rates so those runs are not left unpriced. Luna, Terra, Sol, and Cyber were already in the catalog.
+
 ## [0.9.7-beta] - 2026-09-18
 
 ### Fixed

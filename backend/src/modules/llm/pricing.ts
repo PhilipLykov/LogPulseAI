@@ -42,12 +42,16 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // GPT-5.4 family
   'gpt-5.4-mini':       { input: 0.75,  output: 4.50,  cachedInput: 0.075 },
   'gpt-5.4':            { input: 2.50,  output: 15.00, cachedInput: 0.25 },
-  // GPT-5.5 / 5.6 / GPT-6 (standard short-context)
+  // GPT-5.5 / 5.6 / GPT-6 (standard short-context; OpenAI 2026-09-18)
+  // gpt-5.6 with no suffix is the published alias for Sol.
   'gpt-5.5':            { input: 5.00,  output: 30.00, cachedInput: 0.50 },
   'gpt-5.6-luna':       { input: 0.20,  output: 1.20,  cachedInput: 0.02 },
   'gpt-5.6-terra':      { input: 2.00,  output: 12.00, cachedInput: 0.20 },
-  'gpt-5.6-sol':        { input: 4.00,  output: 20.00, cachedInput: 0.40 },
   'gpt-5.6-cyber':      { input: 12.50, output: 75.00, cachedInput: 1.25 },
+  'gpt-5.6-sol':        { input: 4.00,  output: 20.00, cachedInput: 0.40 },
+  'gpt-5.6':            { input: 4.00,  output: 20.00, cachedInput: 0.40 },
+  'gpt-daybreak-blue':  { input: 4.00,  output: 20.00, cachedInput: 0.40 },
+  'gpt-daybreak-red':   { input: 12.50, output: 75.00, cachedInput: 1.25 },
   'gpt-6-astra':        { input: 10.00, output: 50.00, cachedInput: 1.00 },
   // Reasoning models
   'o1':                  { input: 15.00, output: 60.00 },

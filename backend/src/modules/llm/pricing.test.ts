@@ -29,6 +29,19 @@ describe('resolveModelPricing', () => {
     assert.equal(four?.output, 4.50);
   });
 
+  it('prices gpt-5.6 as Sol and does not price Luna as Sol', () => {
+    const alias = resolveModelPricing('gpt-5.6');
+    const sol = resolveModelPricing('gpt-5.6-sol');
+    const luna = resolveModelPricing('gpt-5.6-luna');
+    const terra = resolveModelPricing('gpt-5.6-terra');
+    assert.equal(alias?.input, 4.00);
+    assert.equal(alias?.output, 20.00);
+    assert.equal(sol?.input, 4.00);
+    assert.equal(luna?.input, 0.20);
+    assert.equal(terra?.input, 2.00);
+    assert.notEqual(luna?.input, sol?.input);
+  });
+
   it('does not price gpt-5.4 at gpt-5 rates', () => {
     const p54 = resolveModelPricing('gpt-5.4');
     const p5 = resolveModelPricing('gpt-5');
