@@ -4,7 +4,7 @@ import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { resolveAiConfig, resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
 import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
-import { estimateCost } from '../llm/pricing.js';
+import { estimateCost, parseTokenUsage } from '../llm/pricing.js';
 import { classifyLlmHttpError, shouldPausePipeline } from '../llm/llmErrors.js';
 import { recordLlmFailure, recordLlmSuccess } from '../llm/llmCircuit.js';
 import { buildChatCompletionBody, shouldRetryWithoutReasoningEffort, effectiveReasoningEffort } from '../llm/reasoning.js';
@@ -371,17 +371,15 @@ export async function askQuestion(
 
   // ── O6: Track RAG LLM usage in llm_usage table ───────────
   try {
-    const usageData = data.usage;
-    const tokenInput = Number(usageData?.prompt_tokens ?? 0);
-    const tokenOutput = Number(usageData?.completion_tokens ?? 0);
-    const cost = estimateCost(tokenInput, tokenOutput, effectiveModel);
+    const usageData = parseTokenUsage(data.usage);
+    const cost = estimateCost(usageData.tokenInput, usageData.tokenOutput, effectiveModel, usageData.tokenCached);
     await db('llm_usage').insert({
       id: uuidv4(),
       system_id: options?.systemId ?? null,
       run_type: 'rag',
       model: effectiveModel,
-      token_input: tokenInput,
-      token_output: tokenOutput,
+      token_input: usageData.tokenInput,
+      token_output: usageData.tokenOutput,
       request_count: 1,
       cost_estimate: cost,
     });

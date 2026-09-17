@@ -8,6 +8,7 @@ import {
   shouldRetryWithoutReasoningEffort,
   type ReasoningEffortSetting,
 } from './reasoning.js';
+import { parseTokenUsage } from './pricing.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -101,6 +102,7 @@ export interface LlmUsageInfo {
   token_input: number;
   token_output: number;
   request_count: number;
+  token_cached?: number;
 }
 
 export interface ScoreEventsResult {
@@ -834,10 +836,12 @@ export class OpenAiAdapter implements LlmAdapter {
         if (!content) {
           logger.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
         }
+        const parsed = parseTokenUsage(data.usage);
         const usage: LlmUsageInfo = {
           model: effectiveModel,
-          token_input: data.usage?.prompt_tokens ?? 0,
-          token_output: data.usage?.completion_tokens ?? 0,
+          token_input: parsed.tokenInput,
+          token_output: parsed.tokenOutput,
+          token_cached: parsed.tokenCached,
           request_count: 1,
         };
 

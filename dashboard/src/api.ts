@@ -1148,6 +1148,7 @@ export interface LlmUsageTotals {
   total_input: number | null;
   total_output: number | null;
   total_requests: number | null;
+  total_runs?: number | null;
   total_cost: number | null;
 }
 

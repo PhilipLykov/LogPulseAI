@@ -1277,7 +1277,7 @@ export async function metaAnalyzeWindow(
       token_input: usage.token_input,
       token_output: usage.token_output,
       request_count: usage.request_count,
-      cost_estimate: usage.model ? estimateCost(usage.token_input, usage.token_output, usage.model) : null,
+      cost_estimate: usage.model ? estimateCost(usage.token_input, usage.token_output, usage.model, usage.token_cached ?? 0) : null,
     });
   });
 

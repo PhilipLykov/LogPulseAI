@@ -218,6 +218,7 @@ export async function runPerEventScoringJob(
   let totalErrors = 0;
   let totalTokenInput = 0;
   let totalTokenOutput = 0;
+  let totalTokenCached = 0;
   let totalRequests = 0;
   let usedModel = '';
   let iterations = 0;
@@ -451,6 +452,7 @@ export async function runPerEventScoringJob(
 
           totalTokenInput += usage.token_input;
           totalTokenOutput += usage.token_output;
+          totalTokenCached += usage.token_cached ?? 0;
           totalRequests += usage.request_count;
           if (!usedModel && usage.model) usedModel = usage.model;
 
@@ -539,7 +541,7 @@ export async function runPerEventScoringJob(
       token_input: totalTokenInput,
       token_output: totalTokenOutput,
       request_count: totalRequests,
-      cost_estimate: usedModel ? estimateCost(totalTokenInput, totalTokenOutput, usedModel) : null,
+      cost_estimate: usedModel ? estimateCost(totalTokenInput, totalTokenOutput, usedModel, totalTokenCached) : null,
     });
   }
 

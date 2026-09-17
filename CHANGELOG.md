@@ -5,6 +5,11 @@ All notable changes to LogPulse AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7-beta] - 2026-09-18
+
+### Fixed
+- **AI Usage tab showed the wrong token cost**: Cost was looked up only on an exact model string, so dated ids (`gpt-5-mini-2025-08-07`), OpenRouter prefixes (`openai/gpt-5-mini`), and newer models (`gpt-5.4`, `gpt-5.4-mini`) stored a blank estimate. The header rates were the *current* model while the total mixed every run, and `SUM(cost_estimate)` skipped those blank rows. Pricing now resolves aliases, includes GPT-5.4+ catalog rates, applies cached-input and extra reasoning tokens when the provider reports them, fills blank rows on read, and the tab states that the total is for every run in the period (the table still shows the latest 200).
+
 ## [0.9.6-beta] - 2026-09-17
 
 ### Fixed

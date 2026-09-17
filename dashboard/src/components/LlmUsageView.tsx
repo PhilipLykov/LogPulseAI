@@ -100,6 +100,7 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
   const totalInput = Number(totals?.total_input ?? 0);
   const totalOutput = Number(totals?.total_output ?? 0);
   const totalRequests = Number(totals?.total_requests ?? 0);
+  const totalRuns = Number(totals?.total_runs ?? records.length);
   const totalCost = totals?.total_cost ?? null;
 
   return (
@@ -112,7 +113,7 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
               Current model: <strong>{model}</strong>
               {pricing && (
                 <span className="usage-pricing-hint">
-                  {' '}(${pricing.input}/M in, ${pricing.output}/M out)
+                  {' '}(new runs: ${pricing.input}/M in, ${pricing.output}/M out)
                 </span>
               )}
             </span>
@@ -171,6 +172,9 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
         <div className="usage-summary-card usage-summary-cost">
           <div className="usage-summary-label">Estimated Cost</div>
           <div className="usage-summary-value">{formatCost(totalCost)}</div>
+          <div className="usage-summary-label">
+            All {totalRuns.toLocaleString()} run{totalRuns !== 1 ? 's' : ''} in this period
+          </div>
         </div>
       </div>
 
@@ -230,10 +234,13 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
       {records.length > 0 && (
         <div className="usage-footer">
           <span className="usage-disclaimer">
-            Cost estimates are approximate, based on published OpenAI pricing. Actual billing may differ.
+            Each row uses that run&apos;s model and published OpenAI rates (USD per 1M tokens).
+            Cached input and reasoning tokens are included when the provider reports them.
+            The total above is for every run in the selected period, not only the rows in this table.
+            Actual invoices may still differ (batch discounts, data-residency uplift, unknown model ids).
           </span>
           <span className="usage-record-count">
-            Showing {records.length} record{records.length !== 1 ? 's' : ''}
+            Showing latest {records.length.toLocaleString()} of {totalRuns.toLocaleString()} run{totalRuns !== 1 ? 's' : ''}
           </span>
         </div>
       )}

@@ -186,10 +186,7 @@ To keep LLM usage **predictable and low cost**, the system **must** implement:
 
 ### 7.3 Observability of cost
 
-- **Measures to implement:** Track and optionally cap:
-  - Number of log lines (or events) sent to the LLM per hour/day.
-  - Number of tokens (or API calls) per hour/day.
-  - Configurable limits or alerts when thresholds are exceeded.
+- Track **input tokens, output tokens, and estimated USD cost** per scoring, meta-analysis, and Ask AI run. Cost uses the model id recorded on that run and published OpenAI per-million-token rates (including dated snapshots and provider prefixes). The AI Usage total is for the selected period, not only the visible table rows.
 
 ### 7.4 Provider quota and billing failures
 

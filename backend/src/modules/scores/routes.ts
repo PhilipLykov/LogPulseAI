@@ -3,7 +3,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
-import { estimateCost, MODEL_PRICING } from '../llm/pricing.js';
+import { estimateCost, resolveModelPricing } from '../llm/pricing.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
 
@@ -543,7 +543,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         const tokenInput = Number(r.token_input) || 0;
         const tokenOutput = Number(r.token_output) || 0;
         const storedCost = r.cost_estimate != null ? Number(r.cost_estimate) : null;
-        const finalCost = (storedCost !== null && Number.isFinite(storedCost))
+        const finalCost = (storedCost !== null && Number.isFinite(storedCost) && storedCost > 0)
           ? storedCost
           : estimateCost(tokenInput, tokenOutput, recordModel);
         return {
@@ -568,16 +568,39 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .sum('token_output as total_output')
         .sum('request_count as total_requests')
         .sum('cost_estimate as total_stored_cost')
+        .count('id as total_runs')
         .first();
+
+      let unpricedQuery = db('llm_usage').whereNull('cost_estimate');
+      if (request.query.from) unpricedQuery = unpricedQuery.where('created_at', '>=', request.query.from);
+      if (request.query.to) unpricedQuery = unpricedQuery.where('created_at', '<=', request.query.to);
+      if (request.query.system_id) unpricedQuery = unpricedQuery.where({ system_id: request.query.system_id });
+      const unpricedByModel = await unpricedQuery
+        .select('model')
+        .sum('token_input as token_input')
+        .sum('token_output as token_output')
+        .groupBy('model');
 
       // PostgreSQL SUM returns bigint/numeric → pg driver serializes as string.
       // Normalize to numbers for a consistent JSON response contract.
       const totalInput = Number(rawTotals?.total_input ?? 0);
       const totalOutput = Number(rawTotals?.total_output ?? 0);
       const totalRequests = Number(rawTotals?.total_requests ?? 0);
-      const totalStoredCost = rawTotals?.total_stored_cost != null
+      const totalRuns = Number(rawTotals?.total_runs ?? 0);
+      let totalCost = rawTotals?.total_stored_cost != null
         ? Number(rawTotals.total_stored_cost)
-        : null;
+        : 0;
+      if (!Number.isFinite(totalCost)) totalCost = 0;
+      for (const row of unpricedByModel) {
+        const est = estimateCost(
+          Number((row as any).token_input) || 0,
+          Number((row as any).token_output) || 0,
+          ((row as any).model as string) || currentModel,
+        );
+        if (est != null) totalCost += est;
+      }
+
+      const resolvedPricing = resolveModelPricing(currentModel);
 
       return reply.send({
         records: enrichedRecords,
@@ -585,14 +608,15 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           total_input: totalInput,
           total_output: totalOutput,
           total_requests: totalRequests,
-          // Use DB-level SUM of cost_estimate when available (accurate for
-          // post-migration records with per-record model tracking).
-          // For legacy records where cost_estimate was NULL, the SUM excludes
-          // them — which is more honest than guessing with a single model.
-          total_cost: totalStoredCost,
+          total_runs: totalRuns,
+          // Stored costs plus on-read estimates for rows that had no catalog match
+          // at insert time (dated ids, OpenRouter prefixes, newer GPT-5.x names).
+          total_cost: totalCost,
         },
         current_model: currentModel,
-        pricing: MODEL_PRICING[currentModel] ?? null,
+        pricing: resolvedPricing
+          ? { input: resolvedPricing.input, output: resolvedPricing.output }
+          : null,
       });
     },
   );

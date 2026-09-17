@@ -302,7 +302,7 @@ One of the most common concerns when deploying AI-powered log analysis is LLM AP
 ### Cost Tracking
 
 LogPulse AI tracks every LLM API call with:
-- **Per-request metrics**: model used, input/output tokens, estimated cost (USD)
+- **Per-request metrics**: model used, input/output tokens, estimated cost (USD) from published rates for that model id (not only the currently selected Settings model)
 - **Per-system breakdown**: see which monitored systems consume the most tokens
 - **Daily usage charts**: visualize spending trends over time
 - **Task-level tracking**: separate tracking for scoring, meta-analysis, and RAG queries
